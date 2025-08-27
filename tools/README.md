@@ -22,6 +22,13 @@ The tools implement **Step 2** of the NYC building visualization plan: extractin
   - Handles different CityGML structure variations
   - Outputs standardized building data format
 
+### Sample Generation Script
+- **`create-sample.ts`** - Creates 5% samples of GML files for testing
+  - Processes individual DA files or all files at once
+  - Maintains complete CityGML structure and building data
+  - Reduces file sizes by ~95% for easier testing and development
+  - Includes progress indicators and error handling
+
 ### Test Infrastructure
 - **`_tests/extract-citygml.test.ts`** - Comprehensive test suite
   - Tests parsing logic with sample CityGML data
@@ -91,6 +98,10 @@ npm run test:all
 ```bash
 # Run extraction script directly
 npx tsx tools/extract-citygml.ts [input-dir] [output-file]
+
+# Run sample generation script
+npx tsx tools/create-sample.ts <DA_number>     # Process single DA file
+npx tsx tools/create-sample.ts --all          # Process all DA files
 
 # Run tests directly
 npx tsx tools/_tests/extract-citygml.test.ts

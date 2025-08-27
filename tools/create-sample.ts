@@ -2,16 +2,16 @@ const fs = require('fs');
 const path = require('path');
 
 function createSampleFromFile(inputFile: string, outputFile: string) {
-  console.log(`\nProcessing: ${path.basename(inputFile)}`);
+  console.log(`Processing: ${path.basename(inputFile)}`);
   
   try {
     // Check file size first
     const stats = fs.statSync(inputFile);
     const fileSizeMB = (stats.size / 1024 / 1024).toFixed(1);
-    console.log(`  📁 File size: ${fileSizeMB} MB`);
+    console.log(`📁 File size: ${fileSizeMB} MB`);
     
     if (stats.size > 1024 * 1024 * 1024) { // > 1GB
-      console.log(`  ⚠️  Large file detected, processing with caution...`);
+      console.log(`⚠️  Large file detected, processing with caution...`);
     }
     
     const content = fs.readFileSync(inputFile, 'utf8');
@@ -34,7 +34,7 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
     let currentStart = -1;
     let depth = 0;
     
-    console.log(`  🔍 Scanning for buildings...`);
+    console.log(`🔍 Scanning for buildings...`);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       
@@ -55,16 +55,16 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
       
       // Progress indicator for large files
       if (i % 100000 === 0 && i > 0) {
-        process.stdout.write(`    Progress: ${((i / lines.length) * 100).toFixed(1)}%\r`);
+        process.stdout.write(`  Progress: ${((i / lines.length) * 100).toFixed(1)}%\r`);
       }
     }
     process.stdout.write('\n');
     
-    console.log(`  Found ${buildingRanges.length} buildings`);
+    console.log(`Found ${buildingRanges.length} buildings`);
     
     // Calculate sample size (5% of total buildings)
     const sampleSize = Math.floor(buildingRanges.length * 0.05);
-    console.log(`  Creating sample with ${sampleSize} buildings (5% of total)`);
+    console.log(`Creating sample with ${sampleSize} buildings (5% of total)`);
     
     // Select buildings to include (every 20th building for approximately 5%)
     const selectedRanges: {start: number, end: number}[] = [];
@@ -80,7 +80,7 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
     // Extract building content
     const buildingContents: string[] = [];
     
-    console.log(`  📝 Extracting building data...`);
+    console.log(`📝 Extracting building data...`);
     for (let i = 0; i < selectedRanges.length; i++) {
       const range = selectedRanges[i];
       const buildingContent = lines.slice(range.start, range.end + 1).join('\n');
@@ -88,7 +88,7 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
       
       // Progress indicator
       if (i % 100 === 0 && i > 0) {
-        process.stdout.write(`    Progress: ${((i / selectedRanges.length) * 100).toFixed(1)}%\r`);
+        process.stdout.write(`  Progress: ${((i / selectedRanges.length) * 100).toFixed(1)}%\r`);
       }
     }
     process.stdout.write('\n');
@@ -107,8 +107,8 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
     const sampleSize_bytes = fs.statSync(outputFile).size;
     const sizeReduction = ((originalSize - sampleSize_bytes) / originalSize * 100).toFixed(1);
     
-    console.log(`  ✅ Sample created: ${path.basename(outputFile)}`);
-    console.log(`  📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
+    console.log(`✅ Sample created: ${path.basename(outputFile)}`);
+    console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
     
     return {
       originalBuildings: buildingRanges.length,
@@ -118,12 +118,12 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
     };
     
   } catch (error: any) {
-    console.error(`  ❌ Error processing ${path.basename(inputFile)}:`, error.message);
+    console.error(`❌ Error processing ${path.basename(inputFile)}:`, error.message);
     throw error;
   }
 }
 
-function createAllSamples() {
+function processAllFiles() {
   const completeDir = 'data/complete';
   const sampleDir = 'data/sample';
   
@@ -174,11 +174,11 @@ function createAllSamples() {
       totalSampleSize += result.sampleSize;
       processedCount++;
       
-      console.log(`  ✅ Successfully processed ${gmlFile}`);
+      console.log(`✅ Successfully processed ${gmlFile}`);
       
     } catch (error: any) {
       console.error(`❌ Failed to process ${gmlFile}:`, error.message);
-      console.log(`  ⏭️  Skipping to next file...`);
+      console.log(`⏭️  Skipping to next file...`);
       continue;
     }
   }
@@ -198,5 +198,55 @@ function createAllSamples() {
   });
 }
 
-// Run the function
-createAllSamples();
+// Get command line arguments
+const args = process.argv.slice(2);
+
+if (args.length === 0) {
+  console.log('NYC 3D Buildings Sample Generator');
+  console.log('================================');
+  console.log('');
+  console.log('Usage:');
+  console.log('  npx tsx tools/create-sample.ts <DA_number>     # Process single DA file');
+  console.log('  npx tsx tools/create-sample.ts --all          # Process all DA files');
+  console.log('');
+  console.log('Examples:');
+  console.log('  npx tsx tools/create-sample.ts 1              # Process DA1');
+  console.log('  npx tsx tools/create-sample.ts 6              # Process DA6');
+  console.log('  npx tsx tools/create-sample.ts --all          # Process all files');
+  console.log('');
+  console.log('Note: Larger files (>500MB) may cause memory issues.');
+  process.exit(1);
+}
+
+if (args[0] === '--all' || args[0] === '-a') {
+  console.log('🚀 Processing all DA files...');
+  processAllFiles();
+} else {
+  const daNumber = args[0];
+  const inputFile = `data/complete/DA${daNumber}_3D_Buildings_Merged.gml`;
+  const outputFile = `data/sample/DA${daNumber}_3D_Buildings_Merged_Sample.gml`;
+  
+  // Ensure sample directory exists
+  if (!fs.existsSync('data/sample')) {
+    fs.mkdirSync('data/sample', { recursive: true });
+  }
+  
+  // Check if input file exists
+  if (!fs.existsSync(inputFile)) {
+    console.error(`❌ Input file not found: ${inputFile}`);
+    process.exit(1);
+  }
+  
+  console.log(`🚀 Processing DA${daNumber}...`);
+  console.log(`Input: ${inputFile}`);
+  console.log(`Output: ${outputFile}`);
+  console.log('');
+  
+  try {
+    createSampleFromFile(inputFile, outputFile);
+    console.log(`\n✅ Successfully processed DA${daNumber}!`);
+  } catch (error) {
+    console.error(`\n❌ Failed to process DA${daNumber}`);
+    process.exit(1);
+  }
+}
