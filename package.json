@@ -4,9 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "tsx tools/_tests/extract-citygml.test.ts",
+    "test:all": "tsx tools/_tests/run-tests.ts",
     "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js",
-    "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch"
+    "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch",
+    "extract": "tsx tools/extract-citygml.ts",
+    "extract:watch": "tsx --watch tools/extract-citygml.ts"
   },
   "keywords": [],
   "author": "",
@@ -18,7 +21,9 @@
     "three": "^0.179.1"
   },
   "devDependencies": {
+    "@types/node": "^24.3.0",
     "esbuild": "^0.25.9",
+    "tsx": "^4.19.2",
     "typescript": "^5.9.2"
   }
 }
