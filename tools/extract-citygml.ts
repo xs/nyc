@@ -186,13 +186,25 @@ function extractFromCityGML(gmlPath: string): ExtractedBuilding[] {
   });
   
   console.log(`Parsing CityGML file: ${gmlPath}`);
-  const xml = fs.readFileSync(gmlPath, 'utf-8');
-  const parsed = parser.parse(xml);
+  
+  try {
+    const xml = fs.readFileSync(gmlPath, 'utf-8');
+    const parsed = parser.parse(xml);
+    
+    // Debug: Log the parsed structure for large files
+    if (gmlPath.includes('DA')) {
+      console.log('  Parsed structure keys:', Object.keys(parsed));
+    }
   
   const buildings: ExtractedBuilding[] = [];
   
   // Navigate through CityGML structure to find buildings
-  const cityModel = parsed['core:CityModel'] || parsed['cityModel'] || parsed;
+  const cityModel = parsed['core:CityModel'] || parsed['CityModel'] || parsed['cityModel'] || parsed;
+  
+  // Debug: Log city model structure for large files
+  if (gmlPath.includes('DA')) {
+    console.log('  CityModel keys:', Object.keys(cityModel || {}));
+  }
   
   // Look for building members in various possible locations
   const buildingMembers = cityModel?.['core:cityObjectMember'] || 
@@ -232,6 +244,10 @@ function extractFromCityGML(gmlPath: string): ExtractedBuilding[] {
   
   console.log(`Extracted ${buildings.length} buildings from ${gmlPath}`);
   return buildings;
+  } catch (error) {
+    console.error(`Error parsing ${gmlPath}:`, error);
+    return [];
+  }
 }
 
 function processDirectory(inputDir: string): ExtractedBuilding[] {
@@ -263,19 +279,88 @@ function processDirectory(inputDir: string): ExtractedBuilding[] {
   return allBuildings;
 }
 
+function processAllDAFiles(): ExtractedBuilding[] {
+  const daDir = './data/complete';
+  const allBuildings: ExtractedBuilding[] = [];
+  
+  if (!fs.existsSync(daDir)) {
+    console.error(`DA directory does not exist: ${daDir}`);
+    return allBuildings;
+  }
+  
+  const files = fs.readdirSync(daDir);
+  const daFiles = files
+    .filter((file: string) => file.toLowerCase().endsWith('.gml'))
+    .sort(); // Sort to process in order DA1, DA2, etc.
+  
+  if (daFiles.length === 0) {
+    console.error(`No DA .gml files found in ${daDir}`);
+    return allBuildings;
+  }
+  
+  console.log(`Found ${daFiles.length} DA files to process`);
+  
+  for (let i = 0; i < daFiles.length; i++) {
+    const file = daFiles[i];
+    const filePath = path.join(daDir, file);
+    const fileSize = fs.statSync(filePath).size;
+    const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(1);
+    
+    console.log(`Processing ${file} (${fileSizeMB}MB) [${i + 1}/${daFiles.length}]`);
+    
+    try {
+      const buildings = extractFromCityGML(filePath);
+      allBuildings.push(...buildings);
+      console.log(`  ✓ Extracted ${buildings.length} buildings from ${file}`);
+    } catch (error) {
+      console.error(`  ✗ Error processing ${file}:`, error);
+    }
+  }
+  
+  return allBuildings;
+}
+
 // CLI interface
 // Check if this is the main module being executed
 const isMainModule = process.argv[1] && process.argv[1].endsWith('extract-citygml.ts');
 
 if (isMainModule) {
-  const inputDir = process.argv[2] || './data/citygml';
-  const outputFile = process.argv[3] || './data/extracted-buildings.json';
+  const args = process.argv.slice(2);
+  const hasAllFlag = args.includes('--all') || args.includes('-a');
+  
+  let inputDir: string;
+  let outputFile: string;
+  
+  if (hasAllFlag) {
+    // Remove the --all flag from args for parsing
+    const filteredArgs = args.filter(arg => arg !== '--all' && arg !== '-a');
+    inputDir = './data/complete'; // Always use DA directory for --all
+    outputFile = filteredArgs[0] || './data/all-da-buildings.json';
+  } else {
+    inputDir = args[0] || './data/citygml';
+    outputFile = args[1] || './data/extracted-buildings.json';
+  }
   
   console.log('Starting CityGML extraction...');
   console.log(`Input directory: ${inputDir}`);
   console.log(`Output file: ${outputFile}`);
   
-  const buildings = processDirectory(inputDir);
+  let buildings: ExtractedBuilding[];
+  
+  if (hasAllFlag) {
+    console.log('Processing all DA files...');
+    buildings = processAllDAFiles();
+  } else {
+    // Check if input is a file or directory
+    const stats = fs.statSync(inputDir);
+    if (stats.isFile()) {
+      // Process single file
+      buildings = extractFromCityGML(inputDir);
+    } else {
+      // Process directory
+      buildings = processDirectory(inputDir);
+    }
+  }
   
   if (buildings.length > 0) {
     // Ensure output directory exists
@@ -298,4 +383,4 @@ if (isMainModule) {
   }
 }
 
-export { extractFromCityGML, processDirectory, ExtractedBuilding };
+export { extractFromCityGML, processDirectory, processAllDAFiles, ExtractedBuilding };

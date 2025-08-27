@@ -9,6 +9,7 @@
     "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js",
     "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch",
     "extract": "tsx tools/extract-citygml.ts",
+    "extract:all": "tsx tools/extract-citygml.ts --all",
     "extract:watch": "tsx --watch tools/extract-citygml.ts"
   },
   "keywords": [],
