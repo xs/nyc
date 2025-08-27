@@ -1,0 +1,22 @@
+{
+  "name": "nyc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "earcut": "^3.0.2",
+    "fast-xml-parser": "^5.2.5",
+    "proj4": "^2.19.10",
+    "three": "^0.179.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.9",
+    "typescript": "^5.9.2"
+  }
+}
