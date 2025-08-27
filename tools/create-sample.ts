@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 
-function createSampleFromFile(inputFile: string, outputFile: string) {
+async function createSampleFromFile(inputFile: string, outputFile: string) {
   console.log(`Processing: ${path.basename(inputFile)}`);
   
   try {
@@ -11,91 +12,84 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
     console.log(`📁 File size: ${fileSizeMB} MB`);
     
     if (stats.size > 1024 * 1024 * 1024) { // > 1GB
-      console.log(`⚠️  Large file detected, processing with caution...`);
+      console.log(`⚠️  Large file detected, using streaming approach...`);
     }
     
-    const content = fs.readFileSync(inputFile, 'utf8');
-    const lines = content.split('\n');
+    // Create read stream
+    const fileStream = fs.createReadStream(inputFile, { encoding: 'utf8' });
+    const rl = readline.createInterface({
+      input: fileStream,
+      crlfDelay: Infinity
+    });
     
-    // Find the header (everything before the first building)
-    let headerEndIndex = 0;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].includes('<bldg:Building gml:id=')) {
-        headerEndIndex = i;
-        break;
-      }
-    }
-    
-    // Extract header
-    const header = lines.slice(0, headerEndIndex).join('\n');
-    
-    // Find all building start and end lines
-    const buildingRanges: {start: number, end: number}[] = [];
-    let currentStart = -1;
-    let depth = 0;
+    let headerLines: string[] = [];
+    let buildingLines: string[] = [];
+    let currentBuilding: string[] = [];
+    let inBuilding = false;
+    let buildingDepth = 0;
+    let buildingCount = 0;
+    let selectedBuildings: string[] = [];
+    let step = 1;
+    let currentStep = 0;
     
     console.log(`🔍 Scanning for buildings...`);
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      
-      if (line.includes('<bldg:Building gml:id=')) {
-        currentStart = i;
-        depth = 1;
-      } else if (currentStart !== -1) {
+    
+    for await (const line of rl) {
+      // Collect header lines until first building
+      if (!inBuilding && line.includes('<bldg:Building gml:id=')) {
+        inBuilding = true;
+        buildingDepth = 1;
+        currentBuilding = [line];
+        buildingCount++;
+        
+        // Calculate step for 5% sampling
+        if (buildingCount === 1) {
+          // Estimate total buildings (rough approximation)
+          const estimatedTotal = Math.floor(stats.size / 15000); // Rough estimate based on file size
+          const sampleSize = Math.floor(estimatedTotal * 0.05);
+          step = Math.floor(estimatedTotal / sampleSize);
+          console.log(`Estimated total buildings: ~${estimatedTotal.toLocaleString()}`);
+          console.log(`Will select every ${step}th building for ~5% sample`);
+        }
+        
+        currentStep++;
+        if (currentStep === step) {
+          selectedBuildings.push(line);
+          currentStep = 0;
+        }
+      } else if (inBuilding) {
+        currentBuilding.push(line);
+        
         if (line.includes('<bldg:') && !line.includes('</bldg:')) {
-          depth++;
+          buildingDepth++;
         } else if (line.includes('</bldg:')) {
-          depth--;
-          if (depth === 0) {
-            buildingRanges.push({start: currentStart, end: i});
-            currentStart = -1;
+          buildingDepth--;
+          if (buildingDepth === 0) {
+            // Building complete
+            if (selectedBuildings.length > 0 && selectedBuildings[selectedBuildings.length - 1] === currentBuilding[0]) {
+              buildingLines.push(...currentBuilding);
+            }
+            currentBuilding = [];
+            inBuilding = false;
           }
         }
+      } else {
+        headerLines.push(line);
       }
-      
-      // Progress indicator for large files
-      if (i % 100000 === 0 && i > 0) {
-        process.stdout.write(`  Progress: ${((i / lines.length) * 100).toFixed(1)}%\r`);
-      }
-    }
-    process.stdout.write('\n');
-    
-    console.log(`Found ${buildingRanges.length} buildings`);
-    
-    // Calculate sample size (5% of total buildings)
-    const sampleSize = Math.floor(buildingRanges.length * 0.05);
-    console.log(`Creating sample with ${sampleSize} buildings (5% of total)`);
-    
-    // Select buildings to include (every 20th building for approximately 5%)
-    const selectedRanges: {start: number, end: number}[] = [];
-    const step = Math.floor(buildingRanges.length / sampleSize);
-    
-    for (let i = 0; i < sampleSize; i++) {
-      const index = i * step;
-      if (index < buildingRanges.length) {
-        selectedRanges.push(buildingRanges[index]);
-      }
-    }
-    
-    // Extract building content
-    const buildingContents: string[] = [];
-    
-    console.log(`📝 Extracting building data...`);
-    for (let i = 0; i < selectedRanges.length; i++) {
-      const range = selectedRanges[i];
-      const buildingContent = lines.slice(range.start, range.end + 1).join('\n');
-      buildingContents.push(buildingContent);
       
       // Progress indicator
-      if (i % 100 === 0 && i > 0) {
-        process.stdout.write(`  Progress: ${((i / selectedRanges.length) * 100).toFixed(1)}%\r`);
+      if (buildingCount % 1000 === 0 && buildingCount > 0) {
+        process.stdout.write(`  Found ${buildingCount.toLocaleString()} buildings\r`);
       }
     }
+    
     process.stdout.write('\n');
+    console.log(`Found ${buildingCount.toLocaleString()} buildings`);
+    console.log(`Selected ${buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length} buildings for sample`);
     
     // Create the sample file content
-    const sampleContent = header + '\n' + 
-      buildingContents.join('\n') + '\n' +
+    const sampleContent = headerLines.join('\n') + '\n' + 
+      buildingLines.join('\n') + '\n' +
       '  </cityObjectMember>\n' +
       '</CityModel>\n';
     
@@ -111,8 +105,8 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
     console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
     
     return {
-      originalBuildings: buildingRanges.length,
-      sampleBuildings: buildingContents.length,
+      originalBuildings: buildingCount,
+      sampleBuildings: buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length,
       originalSize,
       sampleSize: sampleSize_bytes
     };
@@ -123,7 +117,7 @@ function createSampleFromFile(inputFile: string, outputFile: string) {
   }
 }
 
-function processAllFiles() {
+async function processAllFiles() {
   const completeDir = 'data/complete';
   const sampleDir = 'data/sample';
   
@@ -162,7 +156,7 @@ function processAllFiles() {
       console.log(`Processing file ${processedCount + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
       
-      const result = createSampleFromFile(inputFile, outputFile);
+      const result = await createSampleFromFile(inputFile, outputFile);
       results.push({
         file: gmlFile,
         ...result
@@ -202,8 +196,8 @@ function processAllFiles() {
 const args = process.argv.slice(2);
 
 if (args.length === 0) {
-  console.log('NYC 3D Buildings Sample Generator');
-  console.log('================================');
+  console.log('NYC 3D Buildings Sample Generator (Streaming)');
+  console.log('============================================');
   console.log('');
   console.log('Usage:');
   console.log('  npx tsx tools/create-sample.ts <DA_number>     # Process single DA file');
@@ -214,13 +208,20 @@ if (args.length === 0) {
   console.log('  npx tsx tools/create-sample.ts 6              # Process DA6');
   console.log('  npx tsx tools/create-sample.ts --all          # Process all files');
   console.log('');
-  console.log('Note: Larger files (>500MB) may cause memory issues.');
+  console.log('Note: Uses streaming approach to handle large files efficiently.');
   process.exit(1);
 }
 
 if (args[0] === '--all' || args[0] === '-a') {
-  console.log('🚀 Processing all DA files...');
-  processAllFiles();
+  console.log('🚀 Processing all DA files with streaming...');
+  processAllFiles()
+    .then(() => {
+      console.log('\n✅ All files processed successfully!');
+    })
+    .catch((error) => {
+      console.error('\n❌ Error during batch processing:', error.message);
+      process.exit(1);
+    });
 } else {
   const daNumber = args[0];
   const inputFile = `data/complete/DA${daNumber}_3D_Buildings_Merged.gml`;
@@ -237,16 +238,17 @@ if (args[0] === '--all' || args[0] === '-a') {
     process.exit(1);
   }
   
-  console.log(`🚀 Processing DA${daNumber}...`);
+  console.log(`🚀 Processing DA${daNumber} with streaming approach...`);
   console.log(`Input: ${inputFile}`);
   console.log(`Output: ${outputFile}`);
   console.log('');
   
-  try {
-    createSampleFromFile(inputFile, outputFile);
-    console.log(`\n✅ Successfully processed DA${daNumber}!`);
-  } catch (error) {
-    console.error(`\n❌ Failed to process DA${daNumber}`);
-    process.exit(1);
-  }
+  createSampleFromFile(inputFile, outputFile)
+    .then(() => {
+      console.log(`\n✅ Successfully processed DA${daNumber}!`);
+    })
+    .catch((error) => {
+      console.error(`\n❌ Failed to process DA${daNumber}:`, error.message);
+      process.exit(1);
+    });
 }

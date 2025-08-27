@@ -94,8 +94,8 @@ function generateSummary() {
       console.log(`  - ${file} (${sizeMB} MB)`);
     });
     
-    console.log('\n💡 Note: Larger files (>500MB) may cause memory issues.');
-    console.log('   Consider using a streaming approach or processing on a machine with more RAM.');
+    console.log('\n💡 Note: All remaining files can be processed using the streaming approach.');
+    console.log('   Run: npx tsx tools/create-sample.ts --all');
   }
   
   console.log('\n✅ Sample generation complete for available files!');

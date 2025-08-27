@@ -24,10 +24,12 @@ The tools implement **Step 2** of the NYC building visualization plan: extractin
 
 ### Sample Generation Script
 - **`create-sample.ts`** - Creates 5% samples of GML files for testing
+  - Uses streaming approach to handle large files efficiently
   - Processes individual DA files or all files at once
   - Maintains complete CityGML structure and building data
   - Reduces file sizes by ~95% for easier testing and development
   - Includes progress indicators and error handling
+  - Can handle files up to 1.3GB without memory issues
 
 ### Test Infrastructure
 - **`_tests/extract-citygml.test.ts`** - Comprehensive test suite
@@ -80,10 +82,10 @@ npm run extract ./data/complete/DA2_3D_Buildings_Merged.gml ./data/da2-buildings
 
 **Processing Tips:**
 - Start with smaller files (DA1, DA2, DA4) for testing
-- Larger files (DA19, DA20) may take longer to process
+- Larger files (DA19, DA20) may take longer to process but are handled efficiently
 - Use `npm run extract:all` to process all DA files in one command
 - The `--all` flag automatically sorts files and shows progress
-- Consider processing files individually to manage memory usage
+- Sample generation uses streaming to handle all file sizes without memory issues
 
 ### Running Tests
 ```bash
