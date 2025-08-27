@@ -31,15 +31,28 @@ async function createSampleFromFile(inputFile: string, outputFile: string) {
     let selectedBuildings: string[] = [];
     let step = 1;
     let currentStep = 0;
+    let headerComplete = false;
     
     console.log(`🔍 Scanning for buildings...`);
     
     for await (const line of rl) {
-      // Collect header lines until first building
+      // Collect header lines until first cityObjectMember
+      if (!headerComplete && line.includes('<cityObjectMember>')) {
+        headerComplete = true;
+        // Don't include this line in header - we'll add our own cityObjectMember tags
+        continue;
+      }
+      
+      if (!headerComplete) {
+        headerLines.push(line);
+        continue;
+      }
+      
+      // Now we're past the header, look for buildings
       if (!inBuilding && line.includes('<bldg:Building gml:id=')) {
         inBuilding = true;
         buildingDepth = 1;
-        currentBuilding = [line];
+        currentBuilding = ['  <cityObjectMember>', line]; // Start with cityObjectMember tag
         buildingCount++;
         
         // Calculate step for 5% sampling
@@ -66,15 +79,14 @@ async function createSampleFromFile(inputFile: string, outputFile: string) {
           buildingDepth--;
           if (buildingDepth === 0) {
             // Building complete
-            if (selectedBuildings.length > 0 && selectedBuildings[selectedBuildings.length - 1] === currentBuilding[0]) {
+            if (selectedBuildings.length > 0 && selectedBuildings[selectedBuildings.length - 1] === currentBuilding[1]) {
+              currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
               buildingLines.push(...currentBuilding);
             }
             currentBuilding = [];
             inBuilding = false;
           }
         }
-      } else {
-        headerLines.push(line);
       }
       
       // Progress indicator
@@ -90,7 +102,6 @@ async function createSampleFromFile(inputFile: string, outputFile: string) {
     // Create the sample file content
     const sampleContent = headerLines.join('\n') + '\n' + 
       buildingLines.join('\n') + '\n' +
-      '  </cityObjectMember>\n' +
       '</CityModel>\n';
     
     // Write the sample file

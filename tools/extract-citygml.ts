@@ -28,6 +28,11 @@ interface CityGMLGeometry {
     'gml:surfaceMember'?: CityGMLPolygon[];
   };
   'gml:Polygon'?: CityGMLPolygon;
+  'bldg:lod2MultiSurface'?: {
+    'gml:MultiSurface'?: {
+      'gml:surfaceMember'?: CityGMLPolygon[];
+    };
+  };
 }
 
 interface CityGMLSurfaceMember {
@@ -71,6 +76,23 @@ function parsePosList(posList: string): number[][] {
 function extractPolygons(geometry: CityGMLGeometry): number[][][] {
   const polygons: number[][][] = [];
   
+  // Check for bldg:lod2MultiSurface first (this is where the actual geometry is)
+  if (geometry['bldg:lod2MultiSurface']?.['gml:MultiSurface']?.['gml:surfaceMember']) {
+    const members = Array.isArray(geometry['bldg:lod2MultiSurface']['gml:MultiSurface']['gml:surfaceMember']) 
+      ? geometry['bldg:lod2MultiSurface']['gml:MultiSurface']['gml:surfaceMember'] 
+      : [geometry['bldg:lod2MultiSurface']['gml:MultiSurface']['gml:surfaceMember']];
+    
+    for (const member of members) {
+      if (member['gml:Polygon']?.['gml:exterior']?.['gml:LinearRing']?.['gml:posList']) {
+        const exterior = parsePosList(member['gml:Polygon']['gml:exterior']['gml:LinearRing']['gml:posList']);
+        if (exterior.length > 0) {
+          polygons.push(exterior);
+        }
+      }
+    }
+  }
+  
+  // Also check for direct gml:Polygon (fallback)
   if (geometry['gml:Polygon']) {
     const polygon = geometry['gml:Polygon'];
     if (polygon['gml:exterior']?.['gml:LinearRing']?.['gml:posList']) {
@@ -81,6 +103,7 @@ function extractPolygons(geometry: CityGMLGeometry): number[][][] {
     }
   }
   
+  // Also check for direct gml:MultiSurface (fallback)
   if (geometry['gml:MultiSurface']?.['gml:surfaceMember']) {
     const members = Array.isArray(geometry['gml:MultiSurface']['gml:surfaceMember']) 
       ? geometry['gml:MultiSurface']['gml:surfaceMember'] 
@@ -234,8 +257,14 @@ function extractFromCityGML(gmlPath: string): ExtractedBuilding[] {
   for (const building of buildingsToProcess) {
     if (!building) continue;
     
-    if (building['bldg:boundedBy']) {
-      const extracted = extractBuildingGeometry(building);
+    // Handle case where building is a cityObjectMember containing bldg:Building
+    let actualBuilding = building;
+    if (building['bldg:Building']) {
+      actualBuilding = building['bldg:Building'];
+    }
+    
+    if (actualBuilding['bldg:boundedBy']) {
+      const extracted = extractBuildingGeometry(actualBuilding);
       if (extracted.footprint && extracted.footprint.length > 0) {
         buildings.push(extracted as ExtractedBuilding);
       }
