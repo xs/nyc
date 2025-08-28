@@ -6,9 +6,8 @@ import proj4 from 'proj4';
 import { XMLParser } from 'fast-xml-parser';
 import earcut from 'earcut';
 import Flatbush from 'flatbush';
-import { Document, NodeIO, WebIO } from '@gltf-transform/core';
-import { KHRDracoMeshCompression } from '@gltf-transform/extensions';
-import { dedup, weld, reorder, quantize } from '@gltf-transform/functions';
+import * as THREE from 'three';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 
 // Ensure Buffer is available globally
 if (typeof globalThis.Buffer === 'undefined') {
@@ -454,39 +453,45 @@ function writeFlatbushIndex(buildings, outBin, outIds) {
 }
 
 async function writeGLB(buildings, outGlb) {
-  const doc = new Document();
-  const scene = doc.createScene('Scene');
-
-  for (const b of buildings) {
-    if (!b.mesh) continue;
-    const mesh = doc.createMesh(b.id);
-    const pos = doc.createAccessor().setType('VEC3').setArray(b.mesh.positions);
-    const idx = doc.createAccessor().setType('SCALAR').setArray(b.mesh.indices);
-    const prim = doc.createPrimitive().setAttribute('POSITION', pos).setIndices(idx);
-    mesh.addPrimitive(prim);
-    const node = doc.createNode(b.id).setMesh(mesh);
-    scene.addChild(node);
-  }
-
-  await doc.transform(
-    weld(),
-    dedup(),
-    quantize({ quantizePosition: 14, quantizeNormal: 10, quantizeTexcoord: 12 })
-  );
-
-  // doc.createExtension(KHRDracoMeshCompression).setRequired(true);
-
-  // Try NodeIO with explicit buffer handling
-  const io = new NodeIO(); // .registerExtensions([KHRDracoMeshCompression]);
+  const scene = new THREE.Scene();
   
   // Add logging to debug the issue
   console.log(`Writing GLB with ${buildings.filter(b => b.mesh).length} meshes`);
   console.log(`Output path: ${outGlb}`);
   
   try {
-    // Try writing to a temporary buffer first
-    const glbBuffer = await io.writeBinary(doc);
-    fs.writeFileSync(outGlb, glbBuffer);
+    for (const b of buildings) {
+      if (!b.mesh) continue;
+      
+      // Create geometry from positions and indices
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(b.mesh.positions, 3));
+      geometry.setIndex(new THREE.Uint32BufferAttribute(b.mesh.indices, 1));
+      
+      // Create material
+      const material = new THREE.MeshBasicMaterial({ 
+        color: 0x808080,
+        side: THREE.DoubleSide 
+      });
+      
+      // Create mesh
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = b.id;
+      scene.add(mesh);
+    }
+    
+    // Export to GLB
+    const exporter = new GLTFExporter();
+    const options = {
+      binary: true,
+      includeCustomExtensions: false
+    };
+    
+    const result = await new Promise((resolve, reject) => {
+      exporter.parse(scene, resolve, reject, options);
+    });
+    
+    fs.writeFileSync(outGlb, Buffer.from(result));
     console.log('GLB write completed successfully');
   } catch (error) {
     console.log(`GLB write error details: ${error.stack}`);
