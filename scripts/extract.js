@@ -6,7 +6,7 @@ import proj4 from 'proj4';
 import { XMLParser } from 'fast-xml-parser';
 import earcut from 'earcut';
 import Flatbush from 'flatbush';
-import { Document, NodeIO } from '@gltf-transform/core';
+import { Document, NodeIO, WebIO } from '@gltf-transform/core';
 import { KHRDracoMeshCompression } from '@gltf-transform/extensions';
 import { dedup, weld, reorder, quantize } from '@gltf-transform/functions';
 
@@ -471,14 +471,17 @@ async function writeGLB(buildings, outGlb) {
 
   // doc.createExtension(KHRDracoMeshCompression).setRequired(true);
 
-  const io = new NodeIO(); // .registerExtensions([KHRDracoMeshCompression]);
+  // Try WebIO instead of NodeIO
+  const io = new WebIO(); // .registerExtensions([KHRDracoMeshCompression]);
   
   // Add logging to debug the issue
   console.log(`Writing GLB with ${buildings.filter(b => b.mesh).length} meshes`);
   console.log(`Output path: ${outGlb}`);
   
   try {
-    await io.write(outGlb, doc);
+    const glbArrayBuffer = await io.writeBinary(doc);
+    const buffer = Buffer.from(glbArrayBuffer);
+    fs.writeFileSync(outGlb, buffer);
     console.log('GLB write completed successfully');
   } catch (error) {
     console.log(`GLB write error details: ${error.stack}`);
