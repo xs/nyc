@@ -17,3 +17,5 @@
 [2024-12-19 11:35:00] c6d4bd1 SUCCESS 1250 output/glb-test-final
 [2024-12-19 12:00:00] 51bb91d SUCCESS 6060 output/glb-test-grouped (GROUPED)
 [2024-12-19 12:05:00] 51bb91d SUCCESS 7110 output/glb-test-grouped-lod2 (GROUPED LOD2)
+[2024-12-19 12:10:00] f7ed80d SUCCESS 1370 output/glb-test-fixed (FIXED GROUPING)
+[2024-12-19 12:15:00] f7ed80d SUCCESS 1840 output/glb-test-fixed-lod2 (FIXED GROUPING LOD2)
