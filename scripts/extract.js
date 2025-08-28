@@ -330,16 +330,17 @@ function processGMLSync(filePath, { lod2 }) {
   const xml = fs.readFileSync(filePath, 'utf8');
   const root = parser.parse(xml);
 
-  // First pass: collect all geometric elements and their parent building IDs
-  const geometricElements = [];
-  const buildingNodes = new Map(); // building ID -> building node
+  // Use a simpler approach: track the current building ID as we walk through the XML
+  const buildings = [];
+  const buildingGroups = new Map(); // building ID -> array of geometric elements
+  let currentBuildingId = null;
 
   for (const node of walk(root)) {
     if (!node || typeof node !== 'object') continue;
 
     // Check if this is a building node
-    if (node['gml:id'] && (node['gml:id'].includes('Building') || node['gml:id'].startsWith('gml_'))) {
-      buildingNodes.set(node['gml:id'], node);
+    if (node['gml:id'] && node['gml:id'].startsWith('gml_')) {
+      currentBuildingId = node['gml:id'];
       continue;
     }
 
@@ -355,62 +356,16 @@ function processGMLSync(filePath, { lod2 }) {
     const polys = extractPolygons(node);
     if (!polys.length) continue;
 
-    // Find parent building ID by walking up the tree
-    let parentBuildingId = null;
-    let currentNode = node;
-    let depth = 0;
-    const maxDepth = 10; // Prevent infinite loops
-    
-    while (currentNode && depth < maxDepth) {
-      if (currentNode['gml:id'] && buildingNodes.has(currentNode['gml:id'])) {
-        parentBuildingId = currentNode['gml:id'];
-        break;
-      }
-      // Walk up to parent node
-      for (const [parentId, parentNode] of buildingNodes) {
-        if (containsNode(parentNode, currentNode)) {
-          parentBuildingId = parentId;
-          break;
-        }
-      }
-      if (parentBuildingId) break;
-      
-      // Try to find parent in the walk tree
-      for (const walkNode of walk(root)) {
-        if (walkNode && typeof walkNode === 'object' && containsNode(walkNode, currentNode)) {
-          if (walkNode['gml:id'] && buildingNodes.has(walkNode['gml:id'])) {
-            parentBuildingId = walkNode['gml:id'];
-            break;
-          }
-        }
-      }
-      depth++;
-    }
+    // Use current building ID or fallback to element's own ID
+    const buildingId = currentBuildingId || node['gml:id'] || `b_${buildings.length}`;
 
-    if (!parentBuildingId) {
-      // Fallback: use the element's own ID
-      parentBuildingId = node['gml:id'] || `b_${geometricElements.length}`;
+    if (!buildingGroups.has(buildingId)) {
+      buildingGroups.set(buildingId, []);
     }
-
-    geometricElements.push({
-      node,
-      polys,
-      parentBuildingId
-    });
+    buildingGroups.get(buildingId).push({ node, polys });
   }
 
-  // Second pass: group geometric elements by building and create merged buildings
-  const buildingGroups = new Map(); // building ID -> array of geometric elements
-
-  for (const element of geometricElements) {
-    if (!buildingGroups.has(element.parentBuildingId)) {
-      buildingGroups.set(element.parentBuildingId, []);
-    }
-    buildingGroups.get(element.parentBuildingId).push(element);
-  }
-
-  const buildings = [];
-
+  // Process each building group
   for (const [buildingId, elements] of buildingGroups) {
     // Calculate overall height from all elements
     let zmin = Infinity,
@@ -515,24 +470,6 @@ function processGMLSync(filePath, { lod2 }) {
   }
 
   return buildings;
-}
-
-// Helper function to check if a node contains another node
-function containsNode(parent, child) {
-  for (const k of Object.keys(parent)) {
-    const v = parent[k];
-    if (v === child) return true;
-    if (Array.isArray(v)) {
-      for (const item of v) {
-        if (item === child || (item && typeof item === 'object' && containsNode(item, child))) {
-          return true;
-        }
-      }
-    } else if (v && typeof v === 'object') {
-      if (containsNode(v, child)) return true;
-    }
-  }
-  return false;
 }
 
 /* =========================
