@@ -4,11 +4,10 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "tsx tools/_tests/extract-citygml.test.ts",
-    "test:all": "tsx tools/_tests/run-tests.ts",
     "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js",
     "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch",
-    "extract": "node scripts/extract.js --in data/sample --out out/sample"
+    "extract": "node scripts/extract.js --in data/sample --out out/sample",
+    "sample": "node scripts/sample.js"
   },
   "dependencies": {
     "@gltf-transform/core": "^4.2.1",

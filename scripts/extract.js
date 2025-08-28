@@ -7,13 +7,34 @@ import { XMLParser } from 'fast-xml-parser';
 import earcut from 'earcut';
 import Flatbush from 'flatbush';
 import { Document, NodeIO } from '@gltf-transform/core';
-import { DracoMeshCompression } from '@gltf-transform/extensions';
+import { KHRDracoMeshCompression } from '@gltf-transform/extensions';
 import { dedup, weld, reorder, quantize } from '@gltf-transform/functions';
 
 /* =========================
    CLI
    ========================= */
 const argv = process.argv.slice(2);
+
+// Check for help flag
+if (argv.includes('--help') || argv.includes('-h')) {
+  console.log('NYC 3D Buildings Extractor');
+  console.log('==========================');
+  console.log('');
+  console.log('Usage:');
+  console.log('  npm run extract                                    # Use defaults (data/sample -> out/sample)');
+  console.log('  npm run extract -- --in data/sample --out out/sample');
+  console.log('  npm run extract -- --in data/complete --out out/complete --lod2');
+  console.log('  npm run extract -- --in data/sample/DA1_3D_Buildings_Merged_Sample.gml --out out/single');
+  console.log('');
+  console.log('Arguments:');
+  console.log('  --in <directory>    Input directory containing CityGML files (default: data/sample)');
+  console.log('  --out <directory>   Output directory for glTF files (default: out/sample)');
+  console.log('  --lod2              Use LOD2 geometry instead of LOD1 (default: LOD1)');
+  console.log('  --single            Process only the first file found (useful for testing)');
+  console.log('');
+  process.exit(0);
+}
+
 function arg(name, def = undefined) {
   const a = argv.find((s) => s === `--${name}` || s.startsWith(`--${name}=`));
   if (!a) return def;
@@ -434,9 +455,9 @@ async function writeGLB(buildings, outGlb) {
     quantize({ quantizePosition: 14, quantizeNormal: 10, quantizeTexcoord: 12 })
   );
 
-  doc.createExtension(DracoMeshCompression).setRequired(true);
+  doc.createExtension(KHRDracoMeshCompression).setRequired(true);
 
-  const io = new NodeIO().registerExtensions([DracoMeshCompression]);
+  const io = new NodeIO().registerExtensions([KHRDracoMeshCompression]);
   await io.write(outGlb, doc);
 }
 
