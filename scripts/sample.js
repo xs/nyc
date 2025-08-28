@@ -16,6 +16,12 @@ const MANHATTAN_LATLNG = [
   [40.75411, -74.01612], [40.77699, -74.00033]
 ];
 
+// Temporary: Let's try a much broader polygon to see if we can capture more buildings
+// This covers a wider area that might include more Manhattan buildings
+const BROAD_MANHATTAN_LATLNG = [
+  [40.70, -74.02], [40.70, -73.90], [40.88, -73.90], [40.88, -74.02]
+];
+
 // Define EPSG:2263 projection for precise coordinate transformation
 proj4.defs(
   'EPSG:2263',
@@ -26,6 +32,12 @@ proj4.defs(
 function latLngToEPSG2263(lat, lng) {
   // Use proj4js for precise coordinate transformation
   const transformed = proj4('EPSG:4326', 'EPSG:2263', [lng, lat]);
+  
+  // Debug: log the first few transformations to see what we're getting
+  if (lat === 40.69338 && lng === -74.02154) {
+    console.log(`Debug: lat=${lat}, lng=${lng} -> EPSG:2263 [${transformed[0]}, ${transformed[1]}]`);
+  }
+  
   return [transformed[0], transformed[1]];
 }
 
@@ -97,11 +109,17 @@ function isEnvelopeOutsideFilter(envelope, boroughFilter, customPolygonEPSG2263)
   if (!envelope) return false; // If no envelope, we can't skip the file
   
   if (boroughFilter) {
-    // Check if envelope is entirely outside Manhattan bounds
-    return envelope.maxX < MANHATTAN_BOUNDS.minX || 
-           envelope.minX > MANHATTAN_BOUNDS.maxX || 
-           envelope.maxY < MANHATTAN_BOUNDS.minY || 
-           envelope.minY > MANHATTAN_BOUNDS.maxY;
+    // Check if envelope is entirely outside Manhattan polygon bounds
+    const polygonBounds = {
+      minX: Math.min(...MANHATTAN_POLYGON_EPSG2263.map(p => p[0])),
+      maxX: Math.max(...MANHATTAN_POLYGON_EPSG2263.map(p => p[0])),
+      minY: Math.min(...MANHATTAN_POLYGON_EPSG2263.map(p => p[1])),
+      maxY: Math.max(...MANHATTAN_POLYGON_EPSG2263.map(p => p[1]))
+    };
+    return envelope.maxX < polygonBounds.minX || 
+           envelope.minX > polygonBounds.maxX || 
+           envelope.maxY < polygonBounds.minY || 
+           envelope.minY > polygonBounds.maxY;
   } else if (customPolygonEPSG2263) {
     // For custom polygon, we need to check if envelope is entirely outside polygon bounds
     // This is a simplified check - we could make it more precise
@@ -122,6 +140,26 @@ function isEnvelopeOutsideFilter(envelope, boroughFilter, customPolygonEPSG2263)
 
 // Convert Manhattan polygon to EPSG:2263 coordinates
 const MANHATTAN_POLYGON_EPSG2263 = MANHATTAN_LATLNG.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
+
+// Temporary: Try the broader polygon
+const BROAD_MANHATTAN_POLYGON_EPSG2263 = BROAD_MANHATTAN_LATLNG.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
+
+// Debug: log the polygon bounds
+const polygonBounds = {
+  minX: Math.min(...MANHATTAN_POLYGON_EPSG2263.map(p => p[0])),
+  maxX: Math.max(...MANHATTAN_POLYGON_EPSG2263.map(p => p[0])),
+  minY: Math.min(...MANHATTAN_POLYGON_EPSG2263.map(p => p[1])),
+  maxY: Math.max(...MANHATTAN_POLYGON_EPSG2263.map(p => p[1]))
+};
+console.log(`Debug: Manhattan polygon bounds: X[${polygonBounds.minX.toFixed(0)}-${polygonBounds.maxX.toFixed(0)}], Y[${polygonBounds.minY.toFixed(0)}-${polygonBounds.maxY.toFixed(0)}]`);
+
+const broadPolygonBounds = {
+  minX: Math.min(...BROAD_MANHATTAN_POLYGON_EPSG2263.map(p => p[0])),
+  maxX: Math.max(...BROAD_MANHATTAN_POLYGON_EPSG2263.map(p => p[0])),
+  minY: Math.min(...BROAD_MANHATTAN_POLYGON_EPSG2263.map(p => p[1])),
+  maxY: Math.max(...BROAD_MANHATTAN_POLYGON_EPSG2263.map(p => p[1]))
+};
+console.log(`Debug: Broad Manhattan polygon bounds: X[${broadPolygonBounds.minX.toFixed(0)}-${broadPolygonBounds.maxX.toFixed(0)}], Y[${broadPolygonBounds.minY.toFixed(0)}-${broadPolygonBounds.maxY.toFixed(0)}]`);
 
 // Parse polygon string from command line argument
 function parsePolygonString(polyString) {
@@ -151,8 +189,8 @@ function parsePolygonString(polyString) {
 
 // Point-in-polygon check for Manhattan
 function isInManhattan(coords) {
-  // Use bounding box check for maximum accuracy with our data
-  return isInManhattanBounds(coords);
+  // Temporary: Use the broader polygon to see if we can capture more buildings
+  return coords.some(coord => pointInPolygon(coord, BROAD_MANHATTAN_POLYGON_EPSG2263));
 }
 
 // Point-in-polygon check for custom polygon
@@ -221,8 +259,8 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
     const fileSizeMB = (stats.size / 1024 / 1024).toFixed(1);
     console.log(`📁 File size: ${fileSizeMB} MB`);
     
-    // Early boundedBy check for spatial filtering
-    if (boroughFilter || customPolygonEPSG2263) {
+    // Early boundedBy check for spatial filtering (temporarily disabled for debugging)
+    if (false && (boroughFilter || customPolygonEPSG2263)) {
       const envelope = await extractBoundedByEnvelopeStreaming(inputFile);
       
       if (envelope) {
