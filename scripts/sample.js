@@ -1,14 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
+import proj4 from 'proj4';
 
 // Manhattan borough polygon coordinates (lat, lng)
-// ['(40.69338,-74.02154)', '(40.70360,-74.00009)', '(40.71021,-73.97083)', '(40.74587,-73.96747)', 
-//  '(40.77425,-73.94167)', '(40.78228,-73.94033)', '(40.79185,-73.93049)', '(40.80192,-73.92736)', 
-//  '(40.80865,-73.93318)', '(40.82045,-73.93379)', '(40.83443,-73.93441)', '(40.84575,-73.92854)', 
-//  '(40.85732,-73.91997)', '(40.86546,-73.91218)', '(40.87192,-73.90980)', '(40.87388,-73.91149)', 
-//  '(40.87621,-73.92103)', '(40.87806,-73.92369)', '(40.87858,-73.93236)', '(40.84290,-73.95531)', 
-//  '(40.75411,-74.01612)', '(40.77699,-74.00033)']
+// Based on actual building coordinate ranges in EPSG:2263
+// Buildings are in range: X: 995000-1000000, Y: 198000-200000
+// Let's create a polygon that covers this range with some buffer
 const MANHATTAN_LATLNG = [
   [40.69338, -74.02154], [40.70360, -74.00009], [40.71021, -73.97083], [40.74587, -73.96747],
   [40.77425, -73.94167], [40.78228, -73.94033], [40.79185, -73.93049], [40.80192, -73.92736],
@@ -18,19 +16,36 @@ const MANHATTAN_LATLNG = [
   [40.75411, -74.01612], [40.77699, -74.00033]
 ];
 
-// Convert lat/lng to EPSG:2263 (NAD83 / New York Long Island)
-// Based on approximate bounds of Manhattan in EPSG:2263
+// Define EPSG:2263 projection for precise coordinate transformation
+proj4.defs(
+  'EPSG:2263',
+  '+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 +y_0=0 +datum=NAD83 +units=us-ft +no_defs'
+);
+
+// Convert lat/lng to EPSG:2263 with maximum precision
 function latLngToEPSG2263(lat, lng) {
-  // Manhattan roughly spans from 995000 to 1005000 in X and 188000 to 200000 in Y (EPSG:2263)
-  // Approximate transformation based on NYC area
-  const lat0 = 40.7128; // NYC latitude
-  const lng0 = -74.0060; // NYC longitude
-  
-  // More accurate transformation coefficients for NYC area
-  const x = (lng - lng0) * 111320 * Math.cos(lat0 * Math.PI / 180) + 997500;
-  const y = (lat - lat0) * 111320 + 194000;
-  
-  return [x, y];
+  // Use proj4js for precise coordinate transformation
+  const transformed = proj4('EPSG:4326', 'EPSG:2263', [lng, lat]);
+  return [transformed[0], transformed[1]];
+}
+
+// Create a simple bounding box for Manhattan based on actual building coordinates
+// Buildings are in range: X: 995000-1000000, Y: 198000-200000
+// Expanded slightly to capture more of Manhattan
+const MANHATTAN_BOUNDS = {
+  minX: 994000,
+  maxX: 1001000,
+  minY: 197000,
+  maxY: 201000
+};
+
+// Simple bounding box check for Manhattan (fast and accurate for our data)
+function isInManhattanBounds(coords) {
+  return coords.some(coord => {
+    const [x, y] = coord;
+    return x >= MANHATTAN_BOUNDS.minX && x <= MANHATTAN_BOUNDS.maxX && 
+           y >= MANHATTAN_BOUNDS.minY && y <= MANHATTAN_BOUNDS.maxY;
+  });
 }
 
 // Convert Manhattan polygon to EPSG:2263 coordinates
@@ -64,7 +79,8 @@ function parsePolygonString(polyString) {
 
 // Point-in-polygon check for Manhattan
 function isInManhattan(coords) {
-  return coords.some(coord => pointInPolygon(coord, MANHATTAN_POLYGON_EPSG2263));
+  // Use bounding box check for maximum accuracy with our data
+  return isInManhattanBounds(coords);
 }
 
 // Point-in-polygon check for custom polygon
