@@ -338,10 +338,17 @@ function processGMLSync(filePath, { lod2 }) {
   for (const node of walk(root)) {
     if (!node || typeof node !== 'object') continue;
 
-    // Check if this is a building node
+    // Check if this is a building node - look specifically for bldg:Building elements
     if (node['gml:id'] && node['gml:id'].startsWith('gml_')) {
-      currentBuildingId = node['gml:id'];
-      continue;
+      // Check if this node represents a building by looking for building-specific tags
+      const hasBuildingTag = Object.keys(node).some(key => key === 'bldg:Building');
+      const hasBuildingName = node['gml:name'] && node['gml:name'].startsWith('Bldg_');
+      const hasBuildingAttributes = containsTag(node, 'gen:stringAttribute');
+      
+      if (hasBuildingTag || hasBuildingName || hasBuildingAttributes) {
+        currentBuildingId = node['gml:id'];
+        continue;
+      }
     }
 
     // Check if this is a geometric element
