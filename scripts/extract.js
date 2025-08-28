@@ -31,6 +31,12 @@ if (argv.includes('--help') || argv.includes('-h')) {
   console.log('  --out <directory>   Output directory for glTF files (default: out/sample)');
   console.log('  --lod2              Use LOD2 geometry instead of LOD1 (default: LOD1)');
   console.log('  --single            Process only the first file found (useful for testing)');
+  console.log('  -h, --help          Show this help message');
+  console.log('');
+  console.log('Examples:');
+  console.log('  npm run extract                                    # Process data/sample with defaults');
+  console.log('  npm run extract -- --in data/complete --out out/complete --lod2');
+  console.log('  npm run extract -- --in data/sample --out out/test --single');
   console.log('');
   process.exit(0);
 }
