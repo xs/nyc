@@ -11,10 +11,6 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
     const fileSizeMB = (stats.size / 1024 / 1024).toFixed(1);
     console.log(`📁 File size: ${fileSizeMB} MB`);
     
-    if (stats.size > 1024 * 1024 * 1024) { // > 1GB
-      console.log(`⚠️  Large file detected, using streaming approach...`);
-    }
-    
     // Create read stream
     const fileStream = fs.createReadStream(inputFile, { encoding: 'utf8' });
     const rl = readline.createInterface({
@@ -145,7 +141,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
   }
 }
 
-async function processAllFiles(percent = 1) {
+async function processAllFiles(percent = 1, skipOnError = false) {
   const completeDir = 'data/complete';
   const sampleDir = 'data/sample';
   
@@ -173,15 +169,17 @@ async function processAllFiles(percent = 1) {
   let totalOriginalSize = 0;
   let totalSampleSize = 0;
   let processedCount = 0;
+  let failedCount = 0;
   
   // Process each file
-  for (const gmlFile of gmlFiles) {
+  for (let i = 0; i < gmlFiles.length; i++) {
+    const gmlFile = gmlFiles[i];
     const inputFile = path.join(completeDir, gmlFile);
     const outputFile = path.join(sampleDir, gmlFile.replace('.gml', '_Sample.gml'));
     
     try {
       console.log(`\n${'='.repeat(50)}`);
-      console.log(`Processing file ${processedCount + 1} of ${gmlFiles.length}: ${gmlFile}`);
+      console.log(`Processing file ${i + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
       
       const result = await createSampleFromFile(inputFile, outputFile, percent);
@@ -200,8 +198,15 @@ async function processAllFiles(percent = 1) {
       
     } catch (error) {
       console.error(`❌ Failed to process ${gmlFile}:`, error.message);
-      console.log(`⏭️  Skipping to next file...`);
-      continue;
+      failedCount++;
+      
+      if (skipOnError) {
+        console.log(`⏭️  Skipping to next file...`);
+        continue;
+      } else {
+        console.error(`\n❌ Processing stopped due to error. Use --skip-on-error to continue processing other files.`);
+        process.exit(1);
+      }
     }
   }
   
@@ -210,6 +215,9 @@ async function processAllFiles(percent = 1) {
   console.log('📋 SUMMARY');
   console.log('='.repeat(60));
   console.log(`Files processed: ${processedCount}/${gmlFiles.length}`);
+  if (failedCount > 0) {
+    console.log(`Files failed: ${failedCount}/${gmlFiles.length}`);
+  }
   console.log(`Total buildings: ${totalOriginalBuildings.toLocaleString()} → ${totalSampleBuildings.toLocaleString()} (${((totalSampleBuildings / totalOriginalBuildings) * 100).toFixed(1)}%)`);
   console.log(`Total size: ${(totalOriginalSize / 1024 / 1024 / 1024).toFixed(1)} GB → ${(totalSampleSize / 1024 / 1024).toFixed(1)} MB`);
   console.log(`Overall size reduction: ${((totalOriginalSize - totalSampleSize) / totalOriginalSize * 100).toFixed(1)}%`);
@@ -218,6 +226,8 @@ async function processAllFiles(percent = 1) {
   results.forEach(result => {
     console.log(`  - ${result.file.replace('.gml', '_Sample.gml')} (${result.sampleBuildings} buildings)`);
   });
+  
+  return { processedCount, failedCount, totalFiles: gmlFiles.length };
 }
 
 // Get command line arguments
@@ -238,6 +248,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  -i, --idx, --index <numbers>  Comma-separated DA numbers to process (e.g., "1,2,3")');
   console.log('  -p, --pct, --percent <number>  Sampling percentage (default: 1)');
   console.log('  --all, -a                     Process all DA files in data/complete/');
+  console.log('  --skip-on-error               Continue processing other files on error (default: exit)');
   console.log('  -h, --help                    Show this help message');
   console.log('');
   console.log('Examples:');
@@ -245,6 +256,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  npm run sample -- --idx 1,2,3                              # Process DA1, DA2, DA3 with 1% sampling');
   console.log('  npm run sample -- --idx 1,2,3 --pct 5                     # Process DA1, DA2, DA3 with 5% sampling');
   console.log('  npm run sample -- --all --pct 2                           # Process all files with 2% sampling');
+  console.log('  npm run sample -- --all --skip-on-error                   # Process all files, skip errors');
   console.log('');
   console.log('Note: Uses streaming approach to handle large files efficiently.');
   process.exit(0);
@@ -272,6 +284,7 @@ function getArg(name, aliases = [], defaultValue = undefined) {
 const indexArg = getArg('idx', ['index', 'i']);
 const percentArg = getArg('pct', ['percent', 'p'], '1');
 const processAll = args.includes('--all') || args.includes('-a');
+const skipOnError = args.includes('--skip-on-error');
 
 // Validate arguments
 if (!indexArg && !processAll) {
@@ -304,9 +317,18 @@ if (indexArg) {
 
 if (processAll) {
   console.log(`🚀 Processing all DA files with ${percent}% sampling...`);
-  processAllFiles(percent)
-    .then(() => {
-      console.log('\n✅ All files processed successfully!');
+  if (skipOnError) {
+    console.log(`⚠️  --skip-on-error flag enabled: will continue processing on errors`);
+  }
+  processAllFiles(percent, skipOnError)
+    .then((result) => {
+      if (result.processedCount === result.totalFiles) {
+        console.log('\n✅ All files processed successfully!');
+      } else if (result.failedCount > 0) {
+        console.log(`\n⚠️  Processing completed with ${result.failedCount} failures.`);
+      } else {
+        console.log('\n✅ All files processed successfully!');
+      }
     })
     .catch((error) => {
       console.error('\n❌ Error during batch processing:', error.message);
@@ -315,37 +337,63 @@ if (processAll) {
 } else {
   // Process specific DA numbers
   console.log(`🚀 Processing DA files: ${daNumbers.join(', ')} with ${percent}% sampling...`);
+  if (skipOnError) {
+    console.log(`⚠️  --skip-on-error flag enabled: will continue processing on errors`);
+  }
   
   // Ensure sample directory exists
   if (!fs.existsSync('data/sample')) {
     fs.mkdirSync('data/sample', { recursive: true });
   }
   
-  // Process each DA number
-  Promise.all(daNumbers.map(async (daNumber) => {
+  let processedCount = 0;
+  let failedCount = 0;
+  
+  // Process each DA number sequentially
+  for (let i = 0; i < daNumbers.length; i++) {
+    const daNumber = daNumbers[i];
     const inputFile = `data/complete/DA${daNumber}_3D_Buildings_Merged.gml`;
     const outputFile = `data/sample/DA${daNumber}_3D_Buildings_Merged_Sample.gml`;
     
     // Check if input file exists
     if (!fs.existsSync(inputFile)) {
       console.error(`❌ Input file not found: ${inputFile}`);
-      return;
+      if (skipOnError) {
+        failedCount++;
+        continue;
+      } else {
+        process.exit(1);
+      }
     }
     
     console.log(`\nProcessing DA${daNumber}...`);
     console.log(`Input: ${inputFile}`);
     console.log(`Output: ${outputFile}`);
     
-          try {
-        await createSampleFromFile(inputFile, outputFile, percent);
-        console.log(`✅ Successfully processed DA${daNumber}!`);
-      } catch (error) {
-        console.error(`❌ Failed to process DA${daNumber}:`, error.message);
+    try {
+      await createSampleFromFile(inputFile, outputFile, percent);
+      console.log(`✅ Successfully processed DA${daNumber}!`);
+      processedCount++;
+    } catch (error) {
+      console.error(`❌ Failed to process DA${daNumber}:`, error.message);
+      failedCount++;
+      
+      if (skipOnError) {
+        console.log(`⏭️  Skipping to next file...`);
+        continue;
+      } else {
+        console.error(`\n❌ Processing stopped due to error. Use --skip-on-error to continue processing other files.`);
+        process.exit(1);
       }
-  })).then(() => {
-    console.log('\n✅ All specified files processed!');
-  }).catch((error) => {
-    console.error('\n❌ Error during processing:', error.message);
-    process.exit(1);
-  });
+    }
+  }
+  
+  // Final message
+  if (processedCount === daNumbers.length) {
+    console.log('\n✅ All specified files processed successfully!');
+  } else if (failedCount > 0) {
+    console.log(`\n⚠️  Processing completed with ${failedCount} failures.`);
+  } else {
+    console.log('\n✅ All specified files processed successfully!');
+  }
 }
