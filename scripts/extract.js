@@ -476,63 +476,92 @@ function writeGLB(buildings, outGlb) {
   console.log(`Output path: ${outGlb}`);
   
   try {
-    // Create a simple GLB file with just one building for testing
-    const testBuilding = buildings.find(b => b.mesh);
-    if (!testBuilding) {
+    const buildingsWithMeshes = buildings.filter(b => b.mesh);
+    if (buildingsWithMeshes.length === 0) {
       console.log('No buildings with meshes found');
       return;
     }
     
-    console.log(`Creating test GLB with building: ${testBuilding.id}`);
+    console.log(`Creating GLB with ${buildingsWithMeshes.length} buildings`);
     
-    // Create a minimal GLB structure
+    // Create GLB structure for all buildings
     const gltf = {
       asset: { version: "2.0" },
       scene: 0,
-      scenes: [{ nodes: [0] }],
-      nodes: [{ mesh: 0 }],
-      meshes: [{
+      scenes: [{ nodes: buildingsWithMeshes.map((_, i) => i) }],
+      nodes: buildingsWithMeshes.map((_, i) => ({ mesh: i })),
+      meshes: buildingsWithMeshes.map(() => ({
         primitives: [{
           attributes: { POSITION: 0 },
           indices: 1
         }]
-      }],
-      accessors: [
-        {
-          bufferView: 0,
-          componentType: 5126, // FLOAT
-          count: testBuilding.mesh.positions.length / 3,
-          type: "VEC3",
-          max: [Math.max(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 0)),
-                Math.max(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 1)),
-                Math.max(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 2))],
-          min: [Math.min(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 0)),
-                Math.min(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 1)),
-                Math.min(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 2))]
-        },
-        {
-          bufferView: 1,
-          componentType: 5125, // UNSIGNED_INT
-          count: testBuilding.mesh.indices.length,
-          type: "SCALAR"
-        }
-      ],
-      bufferViews: [
-        {
-          buffer: 0,
-          byteOffset: 0,
-          byteLength: testBuilding.mesh.positions.length * 4
-        },
-        {
-          buffer: 0,
-          byteOffset: testBuilding.mesh.positions.length * 4,
-          byteLength: testBuilding.mesh.indices.length * 4
-        }
-      ],
+      })),
+      accessors: [],
+      bufferViews: [],
       buffers: [{
-        byteLength: testBuilding.mesh.positions.length * 4 + testBuilding.mesh.indices.length * 4
+        byteLength: 0 // Will be calculated
       }]
     };
+    
+    // Calculate total buffer size and create accessors/bufferViews
+    let byteOffset = 0;
+    let accessorIndex = 0;
+    let bufferViewIndex = 0;
+    
+    for (const building of buildingsWithMeshes) {
+      const positionsLength = building.mesh.positions.length * 4;
+      const indicesLength = building.mesh.indices.length * 4;
+      
+      // Update mesh to use correct accessor indices
+      gltf.meshes[accessorIndex].primitives[0].attributes.POSITION = accessorIndex * 2;
+      gltf.meshes[accessorIndex].primitives[0].indices = accessorIndex * 2 + 1;
+      
+      // Create position accessor
+      gltf.accessors.push({
+        bufferView: bufferViewIndex,
+        componentType: 5126, // FLOAT
+        count: building.mesh.positions.length / 3,
+        type: "VEC3",
+        max: [Math.max(...building.mesh.positions.filter((_, i) => i % 3 === 0)),
+              Math.max(...building.mesh.positions.filter((_, i) => i % 3 === 1)),
+              Math.max(...building.mesh.positions.filter((_, i) => i % 3 === 2))],
+        min: [Math.min(...building.mesh.positions.filter((_, i) => i % 3 === 0)),
+              Math.min(...building.mesh.positions.filter((_, i) => i % 3 === 1)),
+              Math.min(...building.mesh.positions.filter((_, i) => i % 3 === 2))]
+      });
+      
+      // Create position bufferView
+      gltf.bufferViews.push({
+        buffer: 0,
+        byteOffset: byteOffset,
+        byteLength: positionsLength
+      });
+      
+      byteOffset += positionsLength;
+      bufferViewIndex++;
+      
+      // Create indices accessor
+      gltf.accessors.push({
+        bufferView: bufferViewIndex,
+        componentType: 5125, // UNSIGNED_INT
+        count: building.mesh.indices.length,
+        type: "SCALAR"
+      });
+      
+      // Create indices bufferView
+      gltf.bufferViews.push({
+        buffer: 0,
+        byteOffset: byteOffset,
+        byteLength: indicesLength
+      });
+      
+      byteOffset += indicesLength;
+      bufferViewIndex++;
+      accessorIndex++;
+    }
+    
+    // Update buffer byteLength
+    gltf.buffers[0].byteLength = byteOffset;
     
     // Convert to JSON
     const jsonString = JSON.stringify(gltf);
@@ -542,10 +571,13 @@ function writeGLB(buildings, outGlb) {
     const jsonPadding = (4 - (jsonBuffer.length % 4)) % 4;
     const paddedJsonBuffer = Buffer.concat([jsonBuffer, Buffer.alloc(jsonPadding)]);
     
-    // Create binary data
-    const positionsBuffer = Buffer.from(testBuilding.mesh.positions.buffer);
-    const indicesBuffer = Buffer.from(testBuilding.mesh.indices.buffer);
-    const binaryBuffer = Buffer.concat([positionsBuffer, indicesBuffer]);
+    // Create binary data for all buildings
+    const binaryBuffers = [];
+    for (const building of buildingsWithMeshes) {
+      binaryBuffers.push(Buffer.from(building.mesh.positions.buffer));
+      binaryBuffers.push(Buffer.from(building.mesh.indices.buffer));
+    }
+    const binaryBuffer = Buffer.concat(binaryBuffers);
     
     // Pad binary to 4-byte boundary
     const binaryPadding = (4 - (binaryBuffer.length % 4)) % 4;
