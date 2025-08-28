@@ -6,8 +6,8 @@ import proj4 from 'proj4';
 import { XMLParser } from 'fast-xml-parser';
 import earcut from 'earcut';
 import Flatbush from 'flatbush';
-import * as THREE from 'three';
-import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { Document, NodeIO } from '@gltf-transform/core';
+import { dedup, weld, quantize } from '@gltf-transform/functions';
 
 // Ensure Buffer is available globally
 if (typeof globalThis.Buffer === 'undefined') {
@@ -473,7 +473,8 @@ function writeFlatbushIndex(buildings, outBin, outIds) {
 }
 
 async function writeGLB(buildings, outGlb) {
-  const scene = new THREE.Scene();
+  const doc = new Document();
+  const scene = doc.createScene('Scene');
   
   // Add logging to debug the issue
   console.log(`Writing GLB with ${buildings.filter(b => b.mesh).length} meshes`);
@@ -484,40 +485,30 @@ async function writeGLB(buildings, outGlb) {
     for (const b of buildings) {
       if (!b.mesh) continue;
       
-      // Create geometry from positions and indices
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(b.mesh.positions, 3));
-      geometry.setIndex(new THREE.Uint32BufferAttribute(b.mesh.indices, 1));
-      
-      // Create material
-      const material = new THREE.MeshBasicMaterial({ 
-        color: 0x808080,
-        side: THREE.DoubleSide 
-      });
-      
-      // Create mesh
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = b.id;
-      scene.add(mesh);
+      const mesh = doc.createMesh(b.id);
+      const pos = doc.createAccessor().setType('VEC3').setArray(b.mesh.positions);
+      const idx = doc.createAccessor().setType('SCALAR').setArray(b.mesh.indices);
+      const prim = doc.createPrimitive().setAttribute('POSITION', pos).setIndices(idx);
+      mesh.addPrimitive(prim);
+      const node = doc.createNode(b.id).setMesh(mesh);
+      scene.addChild(node);
       meshCount++;
     }
     
-    console.log(`Added ${meshCount} meshes to scene`);
+    console.log(`Added ${meshCount} meshes to document`);
     
-    // Export to GLB
-    const exporter = new GLTFExporter();
-    const options = {
-      binary: true,
-      includeCustomExtensions: false
-    };
+    // Apply optimizations
+    console.log('Applying optimizations...');
+    await doc.transform(
+      weld(),
+      dedup(),
+      quantize({ quantizePosition: 14, quantizeNormal: 10, quantizeTexcoord: 12 })
+    );
     
-    console.log('Starting GLB export...');
-    const result = await new Promise((resolve, reject) => {
-      exporter.parse(scene, resolve, reject, options);
-    });
-    
-    console.log(`GLB export completed, result size: ${result.byteLength} bytes`);
-    fs.writeFileSync(outGlb, Buffer.from(result));
+    // Write GLB
+    console.log('Writing GLB file...');
+    const io = new NodeIO();
+    await io.write(outGlb, doc);
     console.log('GLB write completed successfully');
   } catch (error) {
     console.log(`GLB write error details: ${error.stack}`);
