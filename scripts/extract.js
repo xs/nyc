@@ -6,8 +6,7 @@ import proj4 from 'proj4';
 import { XMLParser } from 'fast-xml-parser';
 import earcut from 'earcut';
 import Flatbush from 'flatbush';
-import { Document, NodeIO } from '@gltf-transform/core';
-import { dedup, weld, quantize } from '@gltf-transform/functions';
+// Remove glTF-transform imports and try manual GLB creation
 
 // Ensure Buffer is available globally
 if (typeof globalThis.Buffer === 'undefined') {
@@ -472,44 +471,114 @@ function writeFlatbushIndex(buildings, outBin, outIds) {
   fs.writeFileSync(outIds, JSON.stringify(buildings.map((b) => b.id)));
 }
 
-async function writeGLB(buildings, outGlb) {
-  const doc = new Document();
-  const scene = doc.createScene('Scene');
-  
-  // Add logging to debug the issue
+function writeGLB(buildings, outGlb) {
   console.log(`Writing GLB with ${buildings.filter(b => b.mesh).length} meshes`);
   console.log(`Output path: ${outGlb}`);
   
   try {
-    let meshCount = 0;
-    for (const b of buildings) {
-      if (!b.mesh) continue;
-      
-      const mesh = doc.createMesh(b.id);
-      const pos = doc.createAccessor().setType('VEC3').setArray(b.mesh.positions);
-      const idx = doc.createAccessor().setType('SCALAR').setArray(b.mesh.indices);
-      const prim = doc.createPrimitive().setAttribute('POSITION', pos).setIndices(idx);
-      mesh.addPrimitive(prim);
-      const node = doc.createNode(b.id).setMesh(mesh);
-      scene.addChild(node);
-      meshCount++;
+    // Create a simple GLB file with just one building for testing
+    const testBuilding = buildings.find(b => b.mesh);
+    if (!testBuilding) {
+      console.log('No buildings with meshes found');
+      return;
     }
     
-    console.log(`Added ${meshCount} meshes to document`);
+    console.log(`Creating test GLB with building: ${testBuilding.id}`);
     
-    // Apply optimizations
-    console.log('Applying optimizations...');
-    await doc.transform(
-      weld(),
-      dedup(),
-      quantize({ quantizePosition: 14, quantizeNormal: 10, quantizeTexcoord: 12 })
-    );
+    // Create a minimal GLB structure
+    const gltf = {
+      asset: { version: "2.0" },
+      scene: 0,
+      scenes: [{ nodes: [0] }],
+      nodes: [{ mesh: 0 }],
+      meshes: [{
+        primitives: [{
+          attributes: { POSITION: 0 },
+          indices: 1
+        }]
+      }],
+      accessors: [
+        {
+          bufferView: 0,
+          componentType: 5126, // FLOAT
+          count: testBuilding.mesh.positions.length / 3,
+          type: "VEC3",
+          max: [Math.max(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 0)),
+                Math.max(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 1)),
+                Math.max(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 2))],
+          min: [Math.min(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 0)),
+                Math.min(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 1)),
+                Math.min(...testBuilding.mesh.positions.filter((_, i) => i % 3 === 2))]
+        },
+        {
+          bufferView: 1,
+          componentType: 5125, // UNSIGNED_INT
+          count: testBuilding.mesh.indices.length,
+          type: "SCALAR"
+        }
+      ],
+      bufferViews: [
+        {
+          buffer: 0,
+          byteOffset: 0,
+          byteLength: testBuilding.mesh.positions.length * 4
+        },
+        {
+          buffer: 0,
+          byteOffset: testBuilding.mesh.positions.length * 4,
+          byteLength: testBuilding.mesh.indices.length * 4
+        }
+      ],
+      buffers: [{
+        byteLength: testBuilding.mesh.positions.length * 4 + testBuilding.mesh.indices.length * 4
+      }]
+    };
     
-    // Write GLB
-    console.log('Writing GLB file...');
-    const io = new NodeIO();
-    await io.write(outGlb, doc);
+    // Convert to JSON
+    const jsonString = JSON.stringify(gltf);
+    const jsonBuffer = Buffer.from(jsonString, 'utf8');
+    
+    // Pad JSON to 4-byte boundary
+    const jsonPadding = (4 - (jsonBuffer.length % 4)) % 4;
+    const paddedJsonBuffer = Buffer.concat([jsonBuffer, Buffer.alloc(jsonPadding)]);
+    
+    // Create binary data
+    const positionsBuffer = Buffer.from(testBuilding.mesh.positions.buffer);
+    const indicesBuffer = Buffer.from(testBuilding.mesh.indices.buffer);
+    const binaryBuffer = Buffer.concat([positionsBuffer, indicesBuffer]);
+    
+    // Pad binary to 4-byte boundary
+    const binaryPadding = (4 - (binaryBuffer.length % 4)) % 4;
+    const paddedBinaryBuffer = Buffer.concat([binaryBuffer, Buffer.alloc(binaryPadding)]);
+    
+    // Create GLB header (12 bytes)
+    const header = Buffer.alloc(12);
+    header.writeUInt32LE(0x46546C67, 0); // "glTF"
+    header.writeUInt32LE(2, 4); // version
+    header.writeUInt32LE(12 + paddedJsonBuffer.length + paddedBinaryBuffer.length, 8); // total length
+    
+    // Create JSON chunk header (8 bytes)
+    const jsonChunkHeader = Buffer.alloc(8);
+    jsonChunkHeader.writeUInt32LE(paddedJsonBuffer.length, 0);
+    jsonChunkHeader.writeUInt32LE(0x4E4F534A, 4); // "JSON"
+    
+    // Create binary chunk header (8 bytes)
+    const binaryChunkHeader = Buffer.alloc(8);
+    binaryChunkHeader.writeUInt32LE(paddedBinaryBuffer.length, 0);
+    binaryChunkHeader.writeUInt32LE(0x004E4942, 4); // "BIN"
+    
+    // Combine all parts
+    const glbBuffer = Buffer.concat([
+      header,
+      jsonChunkHeader,
+      paddedJsonBuffer,
+      binaryChunkHeader,
+      paddedBinaryBuffer
+    ]);
+    
+    fs.writeFileSync(outGlb, glbBuffer);
     console.log('GLB write completed successfully');
+    console.log(`GLB file size: ${glbBuffer.length} bytes`);
   } catch (error) {
     console.log(`GLB write error details: ${error.stack}`);
     throw error;
