@@ -60,7 +60,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
       lineCount++;
       
       // Write header lines directly to output file
-      if (!headerComplete && line.includes('<core:cityObjectMember>')) {
+      if (!headerComplete && (line.includes('<core:cityObjectMember>') || line.includes('<cityObjectMember>'))) {
         headerComplete = true;
         console.log(`🔍 Header complete at line ${lineCount}`);
         // Don't include this line in header - we'll add our own cityObjectMember tags
