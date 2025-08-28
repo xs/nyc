@@ -8,7 +8,7 @@
     "test:all": "tsx tools/_tests/run-tests.ts",
     "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js",
     "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch",
-    "extract": "node scripts/extract.js"
+    "extract": "node scripts/extract.js --in data/sample --out out/sample"
   },
   "dependencies": {
     "@gltf-transform/core": "^4.2.1",
