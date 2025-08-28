@@ -38,17 +38,8 @@ function latLngToEPSG2263(lat, lng) {
 // Convert Manhattan polygon to EPSG:2263 coordinates
 const MANHATTAN_POLYGON_EPSG2263 = MANHATTAN_LATLNG.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
 
-// Simple bounding box check (fast)
-function isInManhattanBounds(coords) {
-  // Manhattan roughly spans from 995000 to 1005000 in X and 188000 to 200000 in Y (EPSG:2263)
-  return coords.some(coord => {
-    const [x, y] = coord;
-    return x >= 995000 && x <= 1005000 && y >= 188000 && y <= 200000;
-  });
-}
-
-// Point-in-polygon check (more accurate but slower)
-function isInManhattanPolygon(coords) {
+// Point-in-polygon check for Manhattan
+function isInManhattan(coords) {
   return coords.some(coord => pointInPolygon(coord, MANHATTAN_POLYGON_EPSG2263));
 }
 
@@ -92,7 +83,7 @@ function extractCoordinates(gmlText) {
   return null;
 }
 
-async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughFilter = false, usePolygon = false) {
+async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughFilter = false) {
   console.log(`Processing: ${path.basename(inputFile)}`);
   
   try {
@@ -194,11 +185,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
           buildingCoordinates = extractCoordinates(line);
           if (buildingCoordinates && buildingCoordinates.length > 0) {
             // Check if any point of the building is in Manhattan
-            if (usePolygon) {
-              currentBuildingInManhattan = isInManhattanPolygon(buildingCoordinates);
-            } else {
-              currentBuildingInManhattan = isInManhattanBounds(buildingCoordinates);
-            }
+            currentBuildingInManhattan = isInManhattan(buildingCoordinates);
           }
         }
         
@@ -305,7 +292,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
   }
 }
 
-async function processAllFiles(percent = 1, skipOnError = false, boroughFilter = false, usePolygon = false) {
+async function processAllFiles(percent = 1, skipOnError = false, boroughFilter = false) {
   const completeDir = 'data/complete';
   const sampleDir = 'data/sample';
   
@@ -347,7 +334,7 @@ async function processAllFiles(percent = 1, skipOnError = false, boroughFilter =
       console.log(`Processing file ${i + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
       
-      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter, usePolygon);
+      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter);
       
       // Check if we have any buildings in the sample
       if (result.sampleBuildings > 0) {
@@ -436,7 +423,6 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  --all, -a                     Process all DA files in data/complete/');
   console.log('  --skip-on-error               Continue processing other files on error (default: exit)');
   console.log('  --borough                     Filter to Manhattan borough only');
-  console.log('  --polygon                     Use point-in-polygon check (slower but more accurate)');
   console.log('  -h, --help                    Show this help message');
   console.log('');
   console.log('Examples:');
@@ -446,7 +432,6 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  npm run sample -- --all --pct 2                           # Process all files with 2% sampling');
   console.log('  npm run sample -- --all --skip-on-error                   # Process all files, skip errors');
   console.log('  npm run sample -- --all --borough                         # Process all files, Manhattan only');
-  console.log('  npm run sample -- --all --borough --polygon               # Process all files, Manhattan polygon check');
   console.log('');
   console.log('Note: Uses streaming approach to handle large files efficiently.');
   process.exit(0);
@@ -476,7 +461,6 @@ const percentArg = getArg('pct', ['percent', 'p'], '1');
 const processAll = args.includes('--all') || args.includes('-a');
 const skipOnError = args.includes('--skip-on-error');
 const boroughFilter = args.includes('--borough');
-const usePolygon = args.includes('--polygon');
 
 // Validate arguments
 if (!indexArg && !processAll) {
@@ -513,13 +497,9 @@ if (processAll) {
     console.log(`⚠️  --skip-on-error flag enabled: will continue processing on errors`);
   }
   if (boroughFilter) {
-    if (usePolygon) {
-      console.log(`🗽 --borough flag enabled: filtering to Manhattan only (polygon check)`);
-    } else {
-      console.log(`🗽 --borough flag enabled: filtering to Manhattan only (bounding box)`);
-    }
+    console.log(`🗽 --borough flag enabled: filtering to Manhattan only`);
   }
-  processAllFiles(percent, skipOnError, boroughFilter, usePolygon)
+  processAllFiles(percent, skipOnError, boroughFilter)
     .then((result) => {
       if (result.processedCount === result.totalFiles) {
         console.log('\n✅ All files processed successfully!');
@@ -540,11 +520,7 @@ if (processAll) {
     console.log(`⚠️  --skip-on-error flag enabled: will continue processing on errors`);
   }
   if (boroughFilter) {
-    if (usePolygon) {
-      console.log(`🗽 --borough flag enabled: filtering to Manhattan only (polygon check)`);
-    } else {
-      console.log(`🗽 --borough flag enabled: filtering to Manhattan only (bounding box)`);
-    }
+    console.log(`🗽 --borough flag enabled: filtering to Manhattan only`);
   }
   
   // Ensure sample directory exists
@@ -579,7 +555,7 @@ if (processAll) {
     console.log(`Output: ${outputFile}`);
     
     try {
-      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter, usePolygon);
+      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter);
       
       // Check if we have any buildings in the sample
       if (result.sampleBuildings > 0) {
