@@ -21,7 +21,6 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
     let buffer = '';
     let lineCount = 0;
     
-    let headerLines = [];
     let buildingLines = [];
     let currentBuilding = [];
     let inBuilding = false;
@@ -31,6 +30,10 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
     let selectedIndices = [];
     let counter = 0;
     let headerComplete = false;
+    let headerWritten = false;
+    
+    // Create output file and write header immediately
+    const outputStream = fs.createWriteStream(outputFile);
     
     // Generate random indices for sampling (p out of every 100)
     const p = Math.max(1, Math.floor(percent));
@@ -56,7 +59,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
     const processLine = (line) => {
       lineCount++;
       
-      // Collect header lines until first cityObjectMember
+      // Write header lines directly to output file
       if (!headerComplete && line.includes('<cityObjectMember>')) {
         headerComplete = true;
         // Don't include this line in header - we'll add our own cityObjectMember tags
@@ -64,7 +67,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
       }
       
       if (!headerComplete) {
-        headerLines.push(line);
+        outputStream.write(line + '\n');
         return;
       }
       
@@ -151,27 +154,31 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
         console.log(`Found ${buildingCount.toLocaleString()} buildings`);
         console.log(`Selected ${buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length} buildings for sample`);
         
-        // Create the sample file content
-        const sampleContent = headerLines.join('\n') + '\n' + 
-          buildingLines.join('\n') + '\n' +
-          '</CityModel>\n';
+        // Write the building lines to the output file
+        buildingLines.forEach(line => {
+          outputStream.write(line + '\n');
+        });
         
-        // Write the sample file
-        fs.writeFileSync(outputFile, sampleContent);
+        // Close the XML
+        outputStream.write('</CityModel>\n');
+        outputStream.end();
         
-        // Show file sizes for comparison
-        const originalSize = stats.size;
-        const sampleSize_bytes = fs.statSync(outputFile).size;
-        const sizeReduction = ((originalSize - sampleSize_bytes) / originalSize * 100).toFixed(1);
-        
-        console.log(`✅ Sample created: ${path.basename(outputFile)}`);
-        console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
-        
-        resolve({
-          originalBuildings: buildingCount,
-          sampleBuildings: buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length,
-          originalSize,
-          sampleSize: sampleSize_bytes
+        // Wait for the stream to finish writing
+        outputStream.on('finish', () => {
+          // Show file sizes for comparison
+          const originalSize = stats.size;
+          const sampleSize_bytes = fs.statSync(outputFile).size;
+          const sizeReduction = ((originalSize - sampleSize_bytes) / originalSize * 100).toFixed(1);
+          
+          console.log(`✅ Sample created: ${path.basename(outputFile)}`);
+          console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
+          
+          resolve({
+            originalBuildings: buildingCount,
+            sampleBuildings: buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length,
+            originalSize,
+            sampleSize: sampleSize_bytes
+          });
         });
       });
       
