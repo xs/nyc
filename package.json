@@ -10,9 +10,9 @@
     "sample": "node scripts/sample.js"
   },
   "dependencies": {
-    "@gltf-transform/core": "^4.2.1",
-    "@gltf-transform/extensions": "^4.2.1",
-    "@gltf-transform/functions": "^4.2.1",
+    "@gltf-transform/core": "^3.0.0",
+    "@gltf-transform/extensions": "^3.0.0",
+    "@gltf-transform/functions": "^3.0.0",
     "draco3d": "^1.5.7",
     "earcut": "^3.0.2",
     "fast-xml-parser": "^5.2.5",
