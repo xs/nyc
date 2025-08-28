@@ -11,12 +11,15 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
     const fileSizeMB = (stats.size / 1024 / 1024).toFixed(1);
     console.log(`📁 File size: ${fileSizeMB} MB`);
     
-    // Create read stream
-    const fileStream = fs.createReadStream(inputFile, { encoding: 'utf8' });
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
+    // Create read stream with larger buffer size
+    const fileStream = fs.createReadStream(inputFile, { 
+      encoding: 'utf8',
+      highWaterMark: 64 * 1024 // 64KB buffer
     });
+    
+    // Use a custom line reader to handle very long lines
+    let buffer = '';
+    let lineCount = 0;
     
     let headerLines = [];
     let buildingLines = [];
@@ -49,17 +52,20 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
     console.log(`Will select ${p} out of every 100 buildings for ~${percent}% sample`);
     console.log(`Selected indices: [${selectedIndicesArray.join(', ')}]`);
     
-    for await (const line of rl) {
+    // Custom line processing function
+    const processLine = (line) => {
+      lineCount++;
+      
       // Collect header lines until first cityObjectMember
       if (!headerComplete && line.includes('<cityObjectMember>')) {
         headerComplete = true;
         // Don't include this line in header - we'll add our own cityObjectMember tags
-        continue;
+        return;
       }
       
       if (!headerComplete) {
         headerLines.push(line);
-        continue;
+        return;
       }
       
       // Now we're past the header, look for buildings
@@ -106,34 +112,73 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
       if (buildingCount % 1000 === 0 && buildingCount > 0) {
         process.stdout.write(`  Found ${buildingCount.toLocaleString()} buildings\r`);
       }
-    }
-    
-    process.stdout.write('\n');
-    console.log(`Found ${buildingCount.toLocaleString()} buildings`);
-    console.log(`Selected ${buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length} buildings for sample`);
-    
-    // Create the sample file content
-    const sampleContent = headerLines.join('\n') + '\n' + 
-      buildingLines.join('\n') + '\n' +
-      '</CityModel>\n';
-    
-    // Write the sample file
-    fs.writeFileSync(outputFile, sampleContent);
-    
-    // Show file sizes for comparison
-    const originalSize = stats.size;
-    const sampleSize_bytes = fs.statSync(outputFile).size;
-    const sizeReduction = ((originalSize - sampleSize_bytes) / originalSize * 100).toFixed(1);
-    
-    console.log(`✅ Sample created: ${path.basename(outputFile)}`);
-    console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
-    
-    return {
-      originalBuildings: buildingCount,
-      sampleBuildings: buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length,
-      originalSize,
-      sampleSize: sampleSize_bytes
     };
+
+    // Process the file using data events
+    return new Promise((resolve, reject) => {
+      fileStream.on('data', (chunk) => {
+        buffer += chunk;
+        
+        // Process complete lines
+        let newlineIndex;
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.substring(0, newlineIndex).replace(/\r$/, '');
+          buffer = buffer.substring(newlineIndex + 1);
+          
+          try {
+            processLine(line);
+          } catch (error) {
+            console.error(`Error processing line ${lineCount}:`, error.message);
+            reject(error);
+            return;
+          }
+        }
+      });
+      
+      fileStream.on('end', () => {
+        // Process any remaining buffer content
+        if (buffer.trim()) {
+          try {
+            processLine(buffer.trim());
+          } catch (error) {
+            console.error(`Error processing final line:`, error.message);
+            reject(error);
+            return;
+          }
+        }
+        
+        process.stdout.write('\n');
+        console.log(`Found ${buildingCount.toLocaleString()} buildings`);
+        console.log(`Selected ${buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length} buildings for sample`);
+        
+        // Create the sample file content
+        const sampleContent = headerLines.join('\n') + '\n' + 
+          buildingLines.join('\n') + '\n' +
+          '</CityModel>\n';
+        
+        // Write the sample file
+        fs.writeFileSync(outputFile, sampleContent);
+        
+        // Show file sizes for comparison
+        const originalSize = stats.size;
+        const sampleSize_bytes = fs.statSync(outputFile).size;
+        const sizeReduction = ((originalSize - sampleSize_bytes) / originalSize * 100).toFixed(1);
+        
+        console.log(`✅ Sample created: ${path.basename(outputFile)}`);
+        console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
+        
+        resolve({
+          originalBuildings: buildingCount,
+          sampleBuildings: buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length,
+          originalSize,
+          sampleSize: sampleSize_bytes
+        });
+      });
+      
+      fileStream.on('error', (error) => {
+        reject(error);
+      });
+    });
     
   } catch (error) {
     console.error(`❌ Error processing ${path.basename(inputFile)}:`, error.message);
