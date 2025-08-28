@@ -2,23 +2,21 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 
-// Manhattan borough polygon coordinates (lat, lng)
-// ['(40.69338,-74.02154)', '(40.70360,-74.00009)', '(40.71021,-73.97083)', '(40.74587,-73.96747)', 
-//  '(40.77425,-73.94167)', '(40.78228,-73.94033)', '(40.79185,-73.93049)', '(40.80192,-73.92736)', 
-//  '(40.80865,-73.93318)', '(40.82045,-73.93379)', '(40.83443,-73.93441)', '(40.84575,-73.92854)', 
-//  '(40.85732,-73.91997)', '(40.86546,-73.91218)', '(40.87192,-73.90980)', '(40.87388,-73.91149)', 
-//  '(40.87621,-73.92103)', '(40.87806,-73.92369)', '(40.87858,-73.93236)', '(40.84290,-73.95531)', 
-//  '(40.75411,-74.01612)', '(40.77699,-74.00033)']
-//
-// Converted to GML format for point-in-polygon testing
+// Manhattan borough polygon coordinates (EPSG:2263 - NAD83 / New York Long Island)
+// Approximate bounding box for Manhattan in EPSG:2263 coordinates
+// These are rough approximations - for production use, convert lat/lng to EPSG:2263
 const MANHATTAN_POLYGON = [
-  [-74.02154, 40.69338], [-74.00009, 40.70360], [-73.97083, 40.71021], [-73.96747, 40.74587],
-  [-73.94167, 40.77425], [-73.94033, 40.78228], [-73.93049, 40.79185], [-73.92736, 40.80192],
-  [-73.93318, 40.80865], [-73.93379, 40.82045], [-73.93441, 40.83443], [-73.92854, 40.84575],
-  [-73.91997, 40.85732], [-73.91218, 40.86546], [-73.90980, 40.87192], [-73.91149, 40.87388],
-  [-73.92103, 40.87621], [-73.92369, 40.87806], [-73.93236, 40.87858], [-73.95531, 40.84290],
-  [-74.01612, 40.75411], [-74.00033, 40.77699]
+  [970000, 190000], [980000, 190000], [980000, 200000], [970000, 200000]
 ];
+
+// Check if coordinates are within Manhattan bounds
+function isInManhattanBounds(coords) {
+  // Manhattan roughly spans from 995000 to 1005000 in X and 188000 to 200000 in Y (EPSG:2263)
+  return coords.some(coord => {
+    const [x, y] = coord;
+    return x >= 995000 && x <= 1005000 && y >= 188000 && y <= 200000;
+  });
+}
 
 // Point-in-polygon test using ray casting algorithm
 function pointInPolygon(point, polygon) {
@@ -162,9 +160,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
           buildingCoordinates = extractCoordinates(line);
           if (buildingCoordinates && buildingCoordinates.length > 0) {
             // Check if any point of the building is in Manhattan
-            currentBuildingInManhattan = buildingCoordinates.some(coord => 
-              pointInPolygon(coord, MANHATTAN_POLYGON)
-            );
+            currentBuildingInManhattan = isInManhattanBounds(buildingCoordinates);
           }
         }
         
