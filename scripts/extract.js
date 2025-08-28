@@ -8,30 +8,7 @@ import earcut from 'earcut';
 import Flatbush from 'flatbush';
 // Remove glTF-transform imports and try manual GLB creation
 
-// Ensure Buffer is available globally
-if (typeof globalThis.Buffer === 'undefined') {
-  globalThis.Buffer = Buffer;
-}
-
-// Add FileReader polyfill for Three.js GLTFExporter
-if (typeof globalThis.FileReader === 'undefined') {
-  globalThis.FileReader = class FileReader {
-    constructor() {
-      this.result = null;
-      this.error = null;
-      this.readyState = 0;
-    }
-    
-    readAsArrayBuffer(blob) {
-      // Simple polyfill - just resolve with the blob data
-      setTimeout(() => {
-        this.result = blob;
-        this.readyState = 2;
-        if (this.onload) this.onload({ target: this });
-      }, 0);
-    }
-  };
-}
+// No polyfills needed for manual GLB creation
 
 /* =========================
    CLI
