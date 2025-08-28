@@ -3,6 +3,36 @@ import fs, { read } from 'fs';
 import path from 'path';
 import proj4 from 'proj4';
 
+// XML namespaces for CityGML
+const CITYGML_NAMESPACES = {
+  smil20: 'http://www.w3.org/2001/SMIL20/',
+  grp: 'http://www.opengis.net/citygml/cityobjectgroup/1.0',
+  smil20lang: 'http://www.w3.org/2001/SMIL20/Language', 
+  xlink: 'http://www.w3.org/1999/xlink',
+  base: 'http://www.citygml.org/citygml/profiles/base/1.0',
+  luse: 'http://www.opengis.net/citygml/landuse/1.0',
+  xsi: 'http://www.w3.org/2001/XMLSchema-instance',
+  frn: 'http://www.opengis.net/citygml/cityfurniture/1.0',
+  dem: 'http://www.opengis.net/citygml/relief/1.0',
+  tran: 'http://www.opengis.net/citygml/transportation/1.0',
+  wtr: 'http://www.opengis.net/citygml/waterbody/1.0',
+  tex: 'http://www.opengis.net/citygml/texturedsurface/1.0',
+  core: 'http://www.opengis.net/citygml/1.0',
+  xAL: 'urn:oasis:names:tc:ciq:xsdschema:xAL:2.0',
+  bldg: 'http://www.opengis.net/citygml/building/1.0',
+  sch: 'http://www.ascc.net/xml/schematron',
+  app: 'http://www.opengis.net/citygml/appearance/1.0',
+  veg: 'http://www.opengis.net/citygml/vegetation/1.0',
+  gml: 'http://www.opengis.net/gml',
+  gen: 'http://www.opengis.net/citygml/generics/1.0'
+};
+
+// Construct XML header
+const CITYGML_HEADER = `<?xml version="1.0" encoding="UTF-8"?>
+<core:CityModel ${Object.entries(CITYGML_NAMESPACES).map(([ns, url]) => `xmlns:${ns}="${url}"`).join(' ')}>`;
+
+const CITYGML_FOOTER = '</CityModel>';
+
 // Named region polygon coordinates (lat, lng)
 // Based on actual building coordinate ranges in EPSG:2263
 // Buildings are in range: X: 995000-1000000, Y: 198000-200000
@@ -147,7 +177,7 @@ function isInCustomPolygon(coords, polygonEPSG2263) {
 
 // Point-in-polygon test using ray casting algorithm with floating point tolerance
 function pointInPolygon(point, polygon) {
-  const [x, y] = point;
+  const [x, y] = [point[0], point[1]];
   let inside = false;
   
   // Floating point tolerance for coordinate comparisons
@@ -195,9 +225,9 @@ function extractCoordinates(gmlText) {
   if (posListMatch) {
     const coords = posListMatch[1].trim().split(/\s+/).map(Number);
     const points = [];
-    // GML coordinates are X/Y/Z triplets, so we skip every third coordinate (Z)
+    // GML coordinates are X/Y/Z triplets
     for (let i = 0; i < coords.length; i += 3) {
-      points.push([coords[i], coords[i + 1]]); // X, Y only
+      points.push([coords[i], coords[i + 1]], coords[i + 2]); // X, Y, Z 
     }
     return points;
   }
@@ -206,14 +236,14 @@ function extractCoordinates(gmlText) {
   if (posMatches) {
     return posMatches.map(match => {
       const coords = match.replace(/<gml:pos[^>]*>([^<]+)<\/gml:pos>/, '$1').trim().split(/\s+/).map(Number);
-      return [coords[0], coords[1]]; // X, Y only (ignore Z)
+      return [coords[0], coords[1], coords[2]]; // X, Y, Z
     });
   }
   
   return null;
 }
 
-async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFilter = false, customPolygonEPSG2263 = null) {
+async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFilter = false, customPolygonEPSG2263 = null, chunkSize = null) {
   console.log(`Processing: ${path.basename(inputFile)}`);
   
   try {
@@ -256,15 +286,52 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
     let buildingDepth = 0;
     let buildingCount = 0;
     let selectedBuildings = [];
-    let counter = 0;
     let headerComplete = false;
     let headerWritten = false;
     let currentBuildingInBoundary = false;
     let buildingCoordinates = null;
+    let buildingEnvelope = {
+      lowerX: Infinity,
+      lowerY: Infinity,
+      lowerZ: Infinity,
+      upperX: -Infinity,
+      upperY: -Infinity,
+      upperZ: -Infinity
+    };
     let skipBuildingLines = false;
+
+    let outputEnvelope = {
+      lowerX: Infinity,
+      lowerY: Infinity,
+      lowerZ: Infinity,
+      upperX: -Infinity,
+      upperY: -Infinity,
+      upperZ: -Infinity
+    }
+
+    function indentLine(line) {
+      return '  '.repeat(buildingDepth) + line;
+    }
     
-    // Create output file and write header immediately
-    const outputStream = fs.createWriteStream(outputFile);
+    // single file stream
+    let outputStream = null;
+    let tmpOutputStream = null;
+
+    // chunk stream
+    let currentChunkStream = null;
+    let tmpChunkStream = null;
+    let chunkCount = 0;
+    let buildingsInCurrentChunk = 0;
+    let baseFileName = null;
+    
+    if (chunkSize) {
+      // Chunking mode - we'll create multiple files
+      baseFileName = path.basename(inputFile, '.gml');
+      console.log(`📄 Chunking mode: ${chunkSize} buildings per file`);
+    } else {
+      // Single file mode
+      outputStream = fs.createWriteStream(outputFile);
+    }
     
     // Generate random indices for sampling (p out of every 100)
     const p = Math.max(1, Math.floor(percent));
@@ -280,27 +347,28 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
     
     // Take first p elements and create a Set for O(1) lookup
     const selectedIndicesSet = new Set(indices.slice(0, p));
+    console.log(selectedIndicesSet)
     
     console.log(`🔍 Scanning for buildings...`);
-    console.log(`Will select ${p} out of every 100 buildings for ~${percent}% sample`);
+    if (p < 100) {
+      console.log(`Will select ${p} out of every 100 buildings for ~${percent}% sample`);
+    };
     
     // Custom line processing function
     const processLine = (line) => {
       lineCount++;
       
       // Write header lines directly to output file
-      if (!headerComplete && (line.includes('<core:cityObjectMember>') || line.includes('<cityObjectMember>'))) {
-        headerComplete = true;
-        // Don't include this line in header - we'll add our own cityObjectMember tags
-        return;
-      }
-      
       if (!headerComplete) {
-        outputStream.write(line + '\n');
+        if (line.includes('<core:cityObjectMember>') || line.includes('<cityObjectMember>')) {
+          headerComplete = true;
+        }
+        // We always write out own header (i.e., everything before the first cityObjectMember)
         return;
       }
       
       // Now we're past the header, look for buildings
+
       if (!inBuilding && line.includes('<bldg:Building gml:id=')) {
         inBuilding = true;
         buildingDepth = 1;
@@ -309,6 +377,24 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
         currentBuildingInBoundary = false;
         buildingCoordinates = null;
         skipBuildingLines = false;
+
+        // Create new chunk file if needed; reset chunk streams and envelope
+        if (chunkSize && !currentChunkStream) {
+          chunkCount++;
+          const chunkFileName = `${baseFileName}_chunk_${chunkCount.toString().padStart(3, '0')}.gml`;
+          const chunkFilePath = path.join(path.dirname(outputFile), chunkFileName);
+
+          const tmpChunkFileName = `${chunkFileName}.tmp`;
+          const tmpChunkFilePath = path.join(path.dirname(outputFile), tmpChunkFileName);
+          
+          currentChunkStream = fs.createWriteStream(chunkFilePath);
+          tmpChunkStream = fs.createWriteStream(tmpChunkFilePath)
+          
+          // Write header to new chunk file, then wait for buildings.
+          currentChunkStream.write(CITYGML_HEADER + '\n');
+          
+          console.log(`📄 Creating chunk ${chunkCount}: ${chunkFileName}`);
+        }
         
         // Estimate total buildings (rough approximation) - only on first building
         if (buildingCount === 1) {
@@ -319,13 +405,6 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
           console.log(`Target sample size:         ~${sampleSize.toLocaleString()} buildings`);
           process.stdout.write('\n')
         }
-        
-        // Check if this building should be selected based on random sampling
-        const positionInGroup = counter % 100;
-        if (selectedIndicesSet.has(positionInGroup)) {
-          selectedBuildings.push(line);
-        }
-        counter++;
       } else if (inBuilding) {
         // Early skip check - if we're skipping this building, only process closing tags
         if (skipBuildingLines) {
@@ -347,6 +426,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
         
         // Extract coordinates for filtering (only if we haven't found any yet)
         if ((regionArg || customPolygonEPSG2263) && !buildingCoordinates && (line.includes('<gml:posList') || line.includes('<gml:pos'))) {
+          console.log('====== TSX: EXTRACTION ======');
           buildingCoordinates = extractCoordinates(line);
           if (buildingCoordinates && buildingCoordinates.length > 0) {
             // Check if any point of the building is in the target area
@@ -369,7 +449,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
         }
         
         // Add line to currentBuilding (we know we're not skipping at this point)
-        currentBuilding.push(line);
+        currentBuilding.push(indentLine(line));
         
         if (line.includes('<bldg:') && !line.includes('</bldg:')) {
           buildingDepth++;
@@ -377,19 +457,46 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
           buildingDepth--;
           if (buildingDepth === 0) {
             // Building complete
-            if (selectedBuildings.length > 0 && selectedBuildings[selectedBuildings.length - 1] === currentBuilding[1]) {
-                          // Only include building if it's in the target area (when filtering is enabled)
-            if (!(regionArg || customPolygonEPSG2263) || currentBuildingInBoundary) {
+            // check the sample
+              // Only include building if it's in the target area (when filtering is enabled)
+              if (!(regionArg || customPolygonEPSG2263) || currentBuildingInBoundary) {
                 currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
-                buildingLines.push(...currentBuilding);
+                
+                // Check if this building should be selected based on random sampling
+                const positionInGroup = buildingCount % 100;
+                if (selectedIndicesSet.has(positionInGroup)) {
+                  if (chunkSize) {
+
+                    // Write building to current chunk
+                    currentBuilding.forEach(buildingLine => {
+                      currentChunkStream.write(buildingLine + '\n');
+                    });
+                    buildingsInCurrentChunk++;
+
+                    // Check if we need to start a new chunk
+                    if (buildingsInCurrentChunk >= chunkSize) {
+                      // Close current chunk
+                      currentChunkStream.write(CITYGML_FOOTER + '\n');
+                      currentChunkStream.end();
+                      
+                      console.log(`✅ Completed chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`);
+                        
+                      // Reset for next chunk
+                      buildingsInCurrentChunk = 0;
+                      currentChunkStream = null;
+                    }
+                } else {
+                  // Single file mode
+                  buildingLines.push(...currentBuilding);
+                }
               }
-            }
+          }
+
             currentBuilding = [];
             inBuilding = false;
             currentBuildingInBoundary = false;
             buildingCoordinates = null;
             skipBuildingLines = false;
-          }
         }
       }
       
@@ -402,6 +509,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
         readline.moveCursor(process.stdout, 0, -1);
       }
     };
+  }
 
     // Process the file using data events
     return new Promise((resolve, reject) => {
@@ -440,34 +548,75 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
         readline.moveCursor(process.stdout, 0, -1);
         readline.clearLine(process.stdout, 0);
         process.stdout.write(`Found ${buildingCount.toLocaleString()} buildings\n`);
-        console.log(`Selected ${buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length} buildings for sample`);
-        
-        // Write the building lines to the output file
-        buildingLines.forEach(line => {
-          outputStream.write(line + '\n');
-        });
-        
-        // Close the XML
-        outputStream.write('</CityModel>\n');
-        outputStream.end();
-        
-        // Wait for the stream to finish writing
-        outputStream.on('finish', () => {
-          // Show file sizes for comparison
-          const originalSize = stats.size;
-          const sampleSize_bytes = fs.statSync(outputFile).size;
-          const sizeReduction = ((originalSize - sampleSize_bytes) / originalSize * 100).toFixed(1);
+        if (chunkSize) {
+          // Close the last chunk if it has content
+          if (currentChunkStream && buildingsInCurrentChunk > 0) {
+            currentChunkStream.write(CITYGML_FOOTER + '\n');
+            currentChunkStream.end();
+            console.log(`✅ Completed final chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`);
+          }
           
-          console.log(`✅ Sample created: ${path.basename(outputFile)}`);
-          console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
+          const totalSelectedBuildings = buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length;
+          console.log(`Selected ${totalSelectedBuildings} buildings for sample (${chunkCount} chunks)`);
           
-          resolve({
-            originalBuildings: buildingCount,
-            sampleBuildings: buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length,
-            originalSize,
-            sampleSize: sampleSize_bytes
-          });
-        });
+                     // Wait for the stream to finish writing
+           if (currentChunkStream) {
+             currentChunkStream.on('finish', () => {
+               console.log(`✅ Created ${chunkCount} chunk files in: ${path.dirname(outputFile)}`);
+               
+               // In chunking mode, we don't have a single output file to stat
+               // Just show the original size and chunk count
+               const originalSize = stats.size;
+               console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → ${chunkCount} chunk files created`);
+               
+               resolve({
+                 originalBuildings: buildingCount,
+                 sampleBuildings: totalSelectedBuildings,
+                 originalSize,
+                 sampleSize: 0, // We don't track total sample size in chunking mode
+                 chunkCount: chunkCount
+               });
+             });
+           } else {
+             resolve({
+               originalBuildings: buildingCount,
+               sampleBuildings: buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length,
+               originalSize: stats.size,
+               sampleSize: 0,
+               chunkCount: chunkCount
+             });
+           }
+                 } else {
+           // Single file mode
+           console.log(`Selected ${buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length} buildings for sample`);
+           
+           // Write the building lines to the output file
+           buildingLines.forEach(line => {
+             outputStream.write(line + '\n');
+           });
+           
+           // Close the XML
+           outputStream.write('</CityModel>\n');
+           outputStream.end();
+           
+           // Wait for the stream to finish writing
+           outputStream.on('finish', () => {
+             // Show file sizes for comparison
+             const originalSize = stats.size;
+             const sampleSize_bytes = fs.statSync(outputFile).size;
+             const sizeReduction = ((originalSize - sampleSize_bytes) / originalSize * 100).toFixed(1);
+             
+             console.log(`✅ Sample created: ${path.basename(outputFile)}`);
+             console.log(`📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`);
+             
+             resolve({
+               originalBuildings: buildingCount,
+               sampleBuildings: buildingLines.filter(line => line.includes('<bldg:Building gml:id=')).length,
+               originalSize,
+               sampleSize: sampleSize_bytes
+             });
+           });
+         }
       });
       
       fileStream.on('error', (error) => {
@@ -481,10 +630,10 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, regionFi
   }
 }
 
-async function processAllFiles(percent = 1, skipOnError = false, regionArg = null, customPolygonEPSG2263 = null, outputDirName = null, specificDANumbers = null) {
+async function processAllFiles(percent = 1, skipOnError = false, regionArg = null, customPolygonEPSG2263 = null, outputDirName = null, specificDANumbers = null, chunkSize = null) {
   const completeDir = 'data/complete';
   const sampleDir = outputDirName ? `data/${outputDirName}` : 'data/sample';
-  
+
   // Ensure sample directory exists
   if (!fs.existsSync(sampleDir)) {
     fs.mkdirSync(sampleDir, { recursive: true });
@@ -531,7 +680,7 @@ async function processAllFiles(percent = 1, skipOnError = false, regionArg = nul
       console.log(`Processing file ${i + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
       
-      const result = await createSampleFromFile(inputFile, outputFile, percent, regionArg, customPolygonEPSG2263);
+      const result = await createSampleFromFile(inputFile, outputFile, percent, regionArg, customPolygonEPSG2263, chunkSize);
       
       // Check if we have any buildings in the sample
       if (result.sampleBuildings > 0) {
@@ -593,6 +742,11 @@ async function processAllFiles(percent = 1, skipOnError = false, regionArg = nul
     }
 
     console.log(`Total buildings: ${totalOriginalBuildings.toLocaleString()} → ${totalSampleBuildings.toLocaleString()} (${((totalSampleBuildings / totalOriginalBuildings) * 100).toFixed(1)}%)`);
+    if (chunkSize) {
+      const totalChunks = results.reduce((sum, r) => sum + (r.chunkCount || 0), 0);
+      console.log(`Total chunks created: ${totalChunks.toLocaleString()}`);
+      console.log(`Chunk size: ${chunkSize} buildings per file`);
+    }
     console.log(`Total size: ${(totalOriginalSize / 1024 / 1024 / 1024).toFixed(1)} GB → ${(totalSampleSize / 1024 / 1024).toFixed(1)} MB`);
     console.log(`Overall size reduction: ${((totalOriginalSize - totalSampleSize) / totalOriginalSize * 100).toFixed(1)}%`);
     
@@ -624,14 +778,14 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  npm run sample                                             # Process all DA files');
   console.log('');
   console.log('Arguments:');
-  console.log('  -i, --idx, --index <numbers>  Comma-separated DA numbers to process (e.g., "1,2,3")');
+  console.log('  -i, --idx, --index <numbers>   Comma-separated DA numbers to process (e.g., "1,2,3")');
   console.log('  -p, --pct, --percent <number>  Sampling percentage (default: 1)');
-  console.log('  --all, -a                     Process all DA files in data/complete/');
-  console.log('  --skip-on-error               Continue processing other files on error (default: exit)');
-  console.log(`  --region                      Filter to named region only (one of ${Object.keys(REGIONS).join(', ')})`);
-  console.log('  --polygon <polygon>           Filter to custom polygon (lat,lng format)');
-  console.log('  --out <name>                  Custom output directory name: data/<name>/; default based on parameters');
-  console.log('  -h, --help                    Show this help message');
+  console.log('  --skip-on-error                Continue processing other files on error (default: exit)');
+  console.log(`  -r, --region <name>            Filter to named region only (one of ${Object.keys(REGIONS).join(', ')})`);
+  console.log('  --polygon <polygon>            Filter to custom polygon (lat,lng format)');
+  console.log('  -o, --out <name>               Custom output directory name: data/<name>/; default based on parameters');
+  console.log('  -c, --chunk-size <number>      Number of buildings to output per file (default: 3000)');
+  console.log('  -h, --help                     Show this help message');
   console.log('');
   console.log('Examples:');
   console.log('  npm run sample -- --idx 1                                     # Process DA1 with 1% sampling');
@@ -670,9 +824,10 @@ const indexArg = getArg('idx', ['index', 'i']);
 const percentArg = getArg('pct', ['percent', 'p'], '1');
 const processAll = !indexArg; // Process all by default unless specific indices provided
 const skipOnError = args.includes('--skip-on-error');
-const regionArg = getArg('region');
+const regionArg = getArg('region', ['r']);
 const polygonArg = getArg('polygon');
-const outputDirArg = getArg('out');
+const outputDirArg = getArg('out', ['o']);
+const chunkSizeArg = getArg('chunk-size', ['c', 'chunk']); // number of buildings per file
 
 // Validate polygon and regionArg filter mutual exclusivity
 if (regionArg && polygonArg) {
@@ -705,6 +860,16 @@ if (isNaN(percent) || percent < 1 || percent > 100) {
   process.exit(1);
 }
 
+// Parse chunk size
+let chunkSize = null;
+if (chunkSizeArg) {
+  chunkSize = parseInt(chunkSizeArg);
+  if (isNaN(chunkSize) || chunkSize < 0) {
+    console.error('❌ Error: Chunk size must be a nonnegative number');
+    process.exit(1);
+  }
+}
+
 // Parse DA numbers
 let daNumbers = [];
 if (indexArg) {
@@ -733,9 +898,12 @@ if (regionArg) {
 if (customPolygonEPSG2263) {
   console.log(`🗺️  Custom polygon filter enabled`);
 }
+if (chunkSize) {
+  console.log(`📄 --chunk-size flag enabled: ${chunkSize} buildings per file`);
+}
 console.log(`📁 Output directory: data/${outputDirName}`);
 
-processAllFiles(percent, skipOnError, regionArg, customPolygonEPSG2263, outputDirName, processAll ? null : daNumbers)
+processAllFiles(percent, skipOnError, regionArg, customPolygonEPSG2263, outputDirName, processAll ? null : daNumbers, chunkSize)
   .then((result) => {
     if (result.processedCount === result.totalFiles) {
       console.log('\n✅ All files processed successfully!');
