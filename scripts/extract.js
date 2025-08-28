@@ -45,11 +45,20 @@ function arg(name, def = undefined) {
   const a = argv.find((s) => s === `--${name}` || s.startsWith(`--${name}=`));
   if (!a) return def;
   if (a.includes('=')) return a.split('=')[1];
-  return true;
+  // For flags without values, return true only for boolean flags
+  if (name === 'lod2' || name === 'single') return true;
+  // For other flags without values, look for the next argument
+  const idx = argv.indexOf(a);
+  if (idx + 1 < argv.length && !argv[idx + 1].startsWith('--')) {
+    return argv[idx + 1];
+  }
+  return def; // For other flags without values, return default
 }
 const IN_DIR = arg('in', './data/sample');
 const OUT_DIR = arg('out', './out/sample');
 const LOD2 = !!arg('lod2', false);
+
+
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -457,13 +466,12 @@ async function writeGLB(buildings, outGlb) {
   await doc.transform(
     weld(),
     dedup(),
-    reorder({ target: 'size' }),
     quantize({ quantizePosition: 14, quantizeNormal: 10, quantizeTexcoord: 12 })
   );
 
-  doc.createExtension(KHRDracoMeshCompression).setRequired(true);
+  // doc.createExtension(KHRDracoMeshCompression).setRequired(true);
 
-  const io = new NodeIO().registerExtensions([KHRDracoMeshCompression]);
+  const io = new NodeIO(); // .registerExtensions([KHRDracoMeshCompression]);
   await io.write(outGlb, doc);
 }
 
@@ -471,15 +479,31 @@ async function writeGLB(buildings, outGlb) {
    Main
    ========================= */
 (async () => {
-  const files = fs.readdirSync(IN_DIR).filter((f) => f.endsWith('.gml')).sort();
-  if (!files.length) {
-    console.error(`No .gml in ${IN_DIR}`);
-    process.exit(1);
+  let files = [];
+  
+  // Check if IN_DIR is a file or directory
+  if (fs.statSync(IN_DIR).isFile()) {
+    // Single file input
+    if (IN_DIR.endsWith('.gml')) {
+      files = [IN_DIR];
+    } else {
+      console.error(`Input file ${IN_DIR} is not a .gml file`);
+      process.exit(1);
+    }
+  } else {
+    // Directory input
+    files = fs.readdirSync(IN_DIR).filter((f) => f.endsWith('.gml')).sort();
+    if (!files.length) {
+      console.error(`No .gml in ${IN_DIR}`);
+      process.exit(1);
+    }
+    // Convert to full paths
+    files = files.map(f => path.join(IN_DIR, f));
   }
 
   const all = [];
-  for (const f of files) {
-    const p = path.join(IN_DIR, f);
+  for (const p of files) {
+    const f = path.basename(p);
     console.log(`Parsing ${f} …`);
     const bs = processGMLSync(p, { lod2: LOD2 });
     console.log(`  +${bs.length} buildings`);
@@ -496,9 +520,14 @@ async function writeGLB(buildings, outGlb) {
   writeFlatbushIndex(all, idxPath, idsPath);
   console.log(`Wrote ${idxPath}, ${idsPath}`);
 
-  const glbPath = path.join(OUT_DIR, 'buildings.draco.glb');
-  await writeGLB(all, glbPath);
-  console.log(`Wrote ${glbPath}`);
+  try {
+    const glbPath = path.join(OUT_DIR, 'buildings.glb');
+    await writeGLB(all, glbPath);
+    console.log(`Wrote ${glbPath}`);
+  } catch (error) {
+    console.log(`GLB generation failed: ${error.message}`);
+    console.log('Continuing without 3D model...');
+  }
 
   console.log(LOD2 ? 'Mode: LOD2 (roof/wall).' : 'Mode: Extruded massing.');
 })();
