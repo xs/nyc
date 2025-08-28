@@ -19,20 +19,18 @@ const MANHATTAN_LATLNG = [
 ];
 
 // Convert lat/lng to EPSG:2263 (NAD83 / New York Long Island)
-// This is a simplified transformation - for production use, use a proper geodetic library
+// Based on approximate bounds of Manhattan in EPSG:2263
 function latLngToEPSG2263(lat, lng) {
-  // Simplified transformation coefficients for NYC area
-  // These are approximate - for accuracy, use proj4js or similar
+  // Manhattan roughly spans from 995000 to 1005000 in X and 188000 to 200000 in Y (EPSG:2263)
+  // Approximate transformation based on NYC area
   const lat0 = 40.7128; // NYC latitude
   const lng0 = -74.0060; // NYC longitude
-  const scale = 111320; // meters per degree (approximate)
   
-  // Convert to meters from NYC center
-  const x = (lng - lng0) * scale * Math.cos(lat0 * Math.PI / 180);
-  const y = (lat - lat0) * scale;
+  // More accurate transformation coefficients for NYC area
+  const x = (lng - lng0) * 111320 * Math.cos(lat0 * Math.PI / 180) + 997500;
+  const y = (lat - lat0) * 111320 + 194000;
   
-  // Offset to EPSG:2263 origin (approximate)
-  return [x + 1000000, y + 200000];
+  return [x, y];
 }
 
 // Convert Manhattan polygon to EPSG:2263 coordinates
