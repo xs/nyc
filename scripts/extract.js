@@ -476,17 +476,17 @@ async function writeGLB(buildings, outGlb) {
 
   // doc.createExtension(KHRDracoMeshCompression).setRequired(true);
 
-  // Try WebIO instead of NodeIO
-  const io = new WebIO(); // .registerExtensions([KHRDracoMeshCompression]);
+  // Try NodeIO with explicit buffer handling
+  const io = new NodeIO(); // .registerExtensions([KHRDracoMeshCompression]);
   
   // Add logging to debug the issue
   console.log(`Writing GLB with ${buildings.filter(b => b.mesh).length} meshes`);
   console.log(`Output path: ${outGlb}`);
   
   try {
-    const glbArrayBuffer = await io.writeBinary(doc);
-    const buffer = Buffer.from(glbArrayBuffer);
-    fs.writeFileSync(outGlb, buffer);
+    // Try writing to a temporary buffer first
+    const glbBuffer = await io.writeBinary(doc);
+    fs.writeFileSync(outGlb, glbBuffer);
     console.log('GLB write completed successfully');
   } catch (error) {
     console.log(`GLB write error details: ${error.stack}`);
