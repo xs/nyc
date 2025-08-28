@@ -6,8 +6,8 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js",
     "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch",
-    "extract": "node scripts/extract.js",
-    "sample": "node scripts/sample.js",
+    "extract": "tsx scripts/extract.ts",
+    "sample": "tsx scripts/sample.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky"
