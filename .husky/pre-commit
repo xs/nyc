@@ -1,8 +1,2 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
-# Add all changed files to staging
-git add .
-
 # Run lint-staged to format the staged files
 npx lint-staged
