@@ -8,18 +8,21 @@ import proj4 from 'proj4';
 // Buildings are in range: X: 995000-1000000, Y: 198000-200000
 // Let's create a polygon that covers this range with some buffer
 const MANHATTAN_LATLNG = [
-  [40.69338, -74.02154], [40.70360, -74.00009], [40.71021, -73.97083], [40.74587, -73.96747],
-  [40.77425, -73.94167], [40.78228, -73.94033], [40.79185, -73.93049], [40.80192, -73.92736],
-  [40.80865, -73.93318], [40.82045, -73.93379], [40.83443, -73.93441], [40.84575, -73.92854],
-  [40.85732, -73.91997], [40.86546, -73.91218], [40.87192, -73.90980], [40.87388, -73.91149],
-  [40.87621, -73.92103], [40.87806, -73.92369], [40.87858, -73.93236], [40.84290, -73.95531],
-  [40.75411, -74.01612], [40.77699, -74.00033]
-];
-
-// Temporary: Let's try a much broader polygon to see if we can capture more buildings
-// This covers a wider area that might include more Manhattan buildings
-const BROAD_MANHATTAN_LATLNG = [
-  [40.70, -74.02], [40.70, -73.90], [40.88, -73.90], [40.88, -74.02]
+  [40.69880, -74.01355],
+  [40.71161, -73.97322],
+  [40.75516, -73.96023],
+  [40.77962, -73.93760],
+  [40.78787, -73.93593],
+  [40.79740, -73.92768],
+  [40.80455, -73.92994],
+  [40.80977, -73.93323],
+  [40.83528, -73.93426],
+  [40.85428, -73.92289],
+  [40.86810, -73.91012],
+  [40.87348, -73.91050],
+  [40.87949, -73.93056],
+  [40.73901, -74.02210],
+  [40.70193, -74.02398]
 ];
 
 // Define EPSG:2263 projection for precise coordinate transformation
@@ -140,9 +143,7 @@ function isEnvelopeOutsideFilter(envelope, boroughFilter, customPolygonEPSG2263)
 
 // Convert Manhattan polygon to EPSG:2263 coordinates
 const MANHATTAN_POLYGON_EPSG2263 = MANHATTAN_LATLNG.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
-
-// Temporary: Try the broader polygon
-const BROAD_MANHATTAN_POLYGON_EPSG2263 = BROAD_MANHATTAN_LATLNG.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
+console.log(MANHATTAN_POLYGON_EPSG2263)
 
 // Debug: log the polygon bounds
 const polygonBounds = {
@@ -152,16 +153,6 @@ const polygonBounds = {
   maxY: Math.max(...MANHATTAN_POLYGON_EPSG2263.map(p => p[1]))
 };
 console.log(`Debug: Manhattan polygon bounds: X[${polygonBounds.minX.toFixed(0)}-${polygonBounds.maxX.toFixed(0)}], Y[${polygonBounds.minY.toFixed(0)}-${polygonBounds.maxY.toFixed(0)}]`);
-
-const broadPolygonBounds = {
-  minX: Math.min(...BROAD_MANHATTAN_POLYGON_EPSG2263.map(p => p[0])),
-  maxX: Math.max(...BROAD_MANHATTAN_POLYGON_EPSG2263.map(p => p[0])),
-  minY: Math.min(...BROAD_MANHATTAN_POLYGON_EPSG2263.map(p => p[1])),
-  maxY: Math.max(...BROAD_MANHATTAN_POLYGON_EPSG2263.map(p => p[1]))
-};
-console.log(`Debug: Broad Manhattan polygon bounds: X[${broadPolygonBounds.minX.toFixed(0)}-${broadPolygonBounds.maxX.toFixed(0)}], Y[${broadPolygonBounds.minY.toFixed(0)}-${broadPolygonBounds.maxY.toFixed(0)}]`);
-
-
 
 // Parse polygon string from command line argument
 function parsePolygonString(polyString) {
@@ -191,19 +182,7 @@ function parsePolygonString(polyString) {
 
 // Point-in-polygon check for Manhattan
 function isInManhattan(coords) {
-  // Try using the original Manhattan polygon coordinates directly (without transformation)
-  // These might already be in EPSG:2263 format
-  const ORIGINAL_MANHATTAN_EPSG2263 = [
-    [978276.777955421, 191894.2114886712], // From the debug output
-    [978704.777955421, 191894.2114886712], // Approximated
-    [978704.777955421, 259375.2114886712], // Approximated
-    [1009196.777955421, 259375.2114886712], // Approximated
-    [1009196.777955421, 191894.2114886712], // Approximated
-    [978276.777955421, 191894.2114886712]  // Close the polygon
-  ];
-  
-  // Use the original polygon coordinates directly
-  return coords.some(coord => pointInPolygon(coord, ORIGINAL_MANHATTAN_EPSG2263));
+  return coords.some(coord => pointInPolygon(coord, MANHATTAN_POLYGON_EPSG2263));
 }
 
 // Point-in-polygon check for custom polygon
@@ -218,7 +197,7 @@ function pointInPolygon(point, polygon) {
   
   // Floating point tolerance for coordinate comparisons
   // EPSG:2263 coordinates are in meters, try 100 meters tolerance
-  const EPSILON = 100.0;
+  const EPSILON = 100;
   
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     const [xi, yi] = polygon[i];
