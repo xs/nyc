@@ -55,14 +55,14 @@ async function createSampleFromFile(inputFile: string, outputFile: string) {
         currentBuilding = ['  <cityObjectMember>', line]; // Start with cityObjectMember tag
         buildingCount++;
         
-        // Calculate step for 5% sampling
+        // Calculate step for 1% sampling
         if (buildingCount === 1) {
           // Estimate total buildings (rough approximation)
           const estimatedTotal = Math.floor(stats.size / 15000); // Rough estimate based on file size
-          const sampleSize = Math.floor(estimatedTotal * 0.05);
+          const sampleSize = Math.floor(estimatedTotal * 0.01);
           step = Math.floor(estimatedTotal / sampleSize);
           console.log(`Estimated total buildings: ~${estimatedTotal.toLocaleString()}`);
-          console.log(`Will select every ${step}th building for ~5% sample`);
+          console.log(`Will select every ${step}th building for ~1% sample`);
         }
         
         currentStep++;
