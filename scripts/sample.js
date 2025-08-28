@@ -114,6 +114,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
     let headerWritten = false;
     let currentBuildingInManhattan = false;
     let buildingCoordinates = null;
+    let skipBuildingLines = false;
     
     // Create output file and write header immediately
     const outputStream = fs.createWriteStream(outputFile);
@@ -162,6 +163,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
         buildingCount++;
         currentBuildingInManhattan = false;
         buildingCoordinates = null;
+        skipBuildingLines = false;
         
         // Estimate total buildings (rough approximation) - only on first building
         if (buildingCount === 1) {
@@ -178,15 +180,25 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
         }
         counter++;
       } else if (inBuilding) {
-        currentBuilding.push(line);
-        
-        // Extract coordinates for borough filtering
+        // Extract coordinates for borough filtering (only if we haven't found any yet)
         if (boroughFilter && !buildingCoordinates && (line.includes('<gml:posList') || line.includes('<gml:pos'))) {
           buildingCoordinates = extractCoordinates(line);
           if (buildingCoordinates && buildingCoordinates.length > 0) {
             // Check if any point of the building is in Manhattan
             currentBuildingInManhattan = isInManhattan(buildingCoordinates);
+            
+            // Early skip: if building is outside Manhattan and we have coordinates, skip the rest
+            if (!currentBuildingInManhattan) {
+              // Fast-forward through the building until we find the closing tag
+              // We'll set a flag to skip adding lines until building is complete
+              skipBuildingLines = true;
+            }
           }
+        }
+        
+        // Only add lines to currentBuilding if we're not skipping this building
+        if (!skipBuildingLines) {
+          currentBuilding.push(line);
         }
         
         if (line.includes('<bldg:') && !line.includes('</bldg:')) {
@@ -206,6 +218,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
             inBuilding = false;
             currentBuildingInManhattan = false;
             buildingCoordinates = null;
+            skipBuildingLines = false;
           }
         }
       }
