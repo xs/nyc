@@ -330,11 +330,20 @@ function processGMLSync(filePath, { lod2 }) {
   const xml = fs.readFileSync(filePath, 'utf8');
   const root = parser.parse(xml);
 
-  const buildings = [];
+  // First pass: collect all geometric elements and their parent building IDs
+  const geometricElements = [];
+  const buildingNodes = new Map(); // building ID -> building node
 
   for (const node of walk(root)) {
     if (!node || typeof node !== 'object') continue;
 
+    // Check if this is a building node
+    if (node['gml:id'] && (node['gml:id'].includes('Building') || node['gml:id'].startsWith('gml_'))) {
+      buildingNodes.set(node['gml:id'], node);
+      continue;
+    }
+
+    // Check if this is a geometric element
     const looksBuilding =
       containsTag(node, 'Polygon') ||
       containsTag(node, 'RoofSurface') ||
@@ -346,78 +355,184 @@ function processGMLSync(filePath, { lod2 }) {
     const polys = extractPolygons(node);
     if (!polys.length) continue;
 
-    // height from z range (feet → m)
+    // Find parent building ID by walking up the tree
+    let parentBuildingId = null;
+    let currentNode = node;
+    let depth = 0;
+    const maxDepth = 10; // Prevent infinite loops
+    
+    while (currentNode && depth < maxDepth) {
+      if (currentNode['gml:id'] && buildingNodes.has(currentNode['gml:id'])) {
+        parentBuildingId = currentNode['gml:id'];
+        break;
+      }
+      // Walk up to parent node
+      for (const [parentId, parentNode] of buildingNodes) {
+        if (containsNode(parentNode, currentNode)) {
+          parentBuildingId = parentId;
+          break;
+        }
+      }
+      if (parentBuildingId) break;
+      
+      // Try to find parent in the walk tree
+      for (const walkNode of walk(root)) {
+        if (walkNode && typeof walkNode === 'object' && containsNode(walkNode, currentNode)) {
+          if (walkNode['gml:id'] && buildingNodes.has(walkNode['gml:id'])) {
+            parentBuildingId = walkNode['gml:id'];
+            break;
+          }
+        }
+      }
+      depth++;
+    }
+
+    if (!parentBuildingId) {
+      // Fallback: use the element's own ID
+      parentBuildingId = node['gml:id'] || `b_${geometricElements.length}`;
+    }
+
+    geometricElements.push({
+      node,
+      polys,
+      parentBuildingId
+    });
+  }
+
+  // Second pass: group geometric elements by building and create merged buildings
+  const buildingGroups = new Map(); // building ID -> array of geometric elements
+
+  for (const element of geometricElements) {
+    if (!buildingGroups.has(element.parentBuildingId)) {
+      buildingGroups.set(element.parentBuildingId, []);
+    }
+    buildingGroups.get(element.parentBuildingId).push(element);
+  }
+
+  const buildings = [];
+
+  for (const [buildingId, elements] of buildingGroups) {
+    // Calculate overall height from all elements
     let zmin = Infinity,
       zmax = -Infinity;
-    for (const rings of polys) {
-      for (const ring of rings) {
-        for (const p of ring) {
-          if (p[2] < zmin) zmin = p[2];
-          if (p[2] > zmax) zmax = p[2];
+    let allFootprints = [];
+
+    for (const element of elements) {
+      for (const rings of element.polys) {
+        for (const ring of rings) {
+          for (const p of ring) {
+            if (p[2] < zmin) zmin = p[2];
+            if (p[2] > zmax) zmax = p[2];
+          }
         }
       }
+
+      // Extract footprint from each element
+      let fpXYZ = extractLod0Footprint(element.node);
+      if (!fpXYZ) {
+        let lowest = null,
+          low = Infinity;
+        for (const rings of element.polys) {
+          const ring = rings[0];
+          if (!ring || ring.length < 3) continue;
+          const z = Math.min(...ring.map((p) => p[2]));
+          if (z < low) {
+            low = z;
+            lowest = ring;
+          }
+        }
+        fpXYZ = lowest;
+      }
+      if (fpXYZ) {
+        allFootprints.push(fpXYZ);
+      }
     }
+
     const height_m = Math.max(0, (zmax - zmin) * FT_TO_M);
 
-    // footprint: lod0FootPrint preferred, else lowest ring
-    let fpXYZ = extractLod0Footprint(node);
-    if (!fpXYZ) {
-      let lowest = null,
-        low = Infinity;
-      for (const rings of polys) {
-        const ring = rings[0];
-        if (!ring || ring.length < 3) continue;
-        const z = Math.min(...ring.map((p) => p[2]));
-        if (z < low) {
-          low = z;
-          lowest = ring;
-        }
+    // Use the largest footprint as the main footprint
+    let mainFootprint = null;
+    let maxArea = 0;
+    for (const fpXYZ of allFootprints) {
+      let footprint = fpXYZ.map(([x, y]) => reprojXY(x, y));
+      // remove duplicated closing point if present
+      if (footprint.length >= 2) {
+        const a = footprint[0],
+          b = footprint[footprint.length - 1];
+        if (a[0] === b[0] && a[1] === b[1]) footprint.pop();
       }
-      fpXYZ = lowest;
-    }
-    if (!fpXYZ) continue;
+      if (footprint.length < 3) continue;
 
-    let footprint = fpXYZ.map(([x, y]) => reprojXY(x, y));
-    // remove duplicated closing point if present
-    if (footprint.length >= 2) {
-      const a = footprint[0],
-        b = footprint[footprint.length - 1];
-      if (a[0] === b[0] && a[1] === b[1]) footprint.pop();
-    }
-    if (footprint.length < 3) continue;
+      // Calculate area (simple polygon area)
+      let area = 0;
+      for (let i = 0; i < footprint.length; i++) {
+        const j = (i + 1) % footprint.length;
+        area += footprint[i][0] * footprint[j][1];
+        area -= footprint[j][0] * footprint[i][1];
+      }
+      area = Math.abs(area) / 2;
 
-    const id = node['gml:id'] || node['id'] || `b_${buildings.length}`;
-    const b = { id, footprint, height_m: +height_m.toFixed(2) };
+      if (area > maxArea) {
+        maxArea = area;
+        mainFootprint = footprint;
+      }
+    }
+
+    if (!mainFootprint) continue;
+
+    const b = { id: buildingId, footprint: mainFootprint, height_m: +height_m.toFixed(2) };
 
     if (lod2) {
-      // true LOD2 geometry
+      // Merge all LOD2 geometries for this building
       const pos = [];
       const idx = [];
       let offset = 0;
-      for (const rings of polys) {
-        const rings3D = rings.map((r) =>
-          r.map(([x, y, z]) => {
-            const [mx, my] = reprojXY(x, y);
-            return [mx, my, z * FT_TO_M];
-          })
-        );
-        const { positions, indices } = triangulate3D(rings3D);
-        for (let i = 0; i < positions.length; i++) pos.push(positions[i]);
-        for (let i = 0; i < indices.length; i++) idx.push(indices[i] + offset);
-        offset += positions.length / 3;
+      
+      for (const element of elements) {
+        for (const rings of element.polys) {
+          const rings3D = rings.map((r) =>
+            r.map(([x, y, z]) => {
+              const [mx, my] = reprojXY(x, y);
+              return [mx, my, z * FT_TO_M];
+            })
+          );
+          const { positions, indices } = triangulate3D(rings3D);
+          for (let i = 0; i < positions.length; i++) pos.push(positions[i]);
+          for (let i = 0; i < indices.length; i++) idx.push(indices[i] + offset);
+          offset += positions.length / 3;
+        }
       }
+      
       if (pos.length >= 9 && idx.length >= 3) {
         b.mesh = { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
       }
     } else {
       // extruded massing
-      b.mesh = extrudeFootprint(footprint, b.height_m);
+      b.mesh = extrudeFootprint(mainFootprint, b.height_m);
     }
 
     buildings.push(b);
   }
 
   return buildings;
+}
+
+// Helper function to check if a node contains another node
+function containsNode(parent, child) {
+  for (const k of Object.keys(parent)) {
+    const v = parent[k];
+    if (v === child) return true;
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item === child || (item && typeof item === 'object' && containsNode(item, child))) {
+          return true;
+        }
+      }
+    } else if (v && typeof v === 'object') {
+      if (containsNode(v, child)) return true;
+    }
+  }
+  return false;
 }
 
 /* =========================
