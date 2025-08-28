@@ -1,4 +1,6 @@
 .DS_Store
 
-data/complete/*
+data/*
+out/*
 node_modules/*
+
