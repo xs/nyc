@@ -5,6 +5,7 @@ This project processes NYC 3D building data from CityGML format into optimized f
 ## Overview
 
 The project consists of two main scripts:
+
 - **`sample.js`**: Creates sample datasets by extracting a percentage of buildings from large CityGML files
 - **`extract.js`**: Converts CityGML files to glTF format with spatial indexing for web use
 
@@ -53,6 +54,7 @@ npm run sample -- --all --borough --output-dir manhattan-data
 #### Output Directory Naming
 
 The script automatically generates output directory names based on parameters:
+
 - `nyc-{percent}` (no filtering)
 - `manhattan-{percent}` (borough filter)
 - `manhattan-all` (borough filter, 100% sampling)
@@ -127,20 +129,24 @@ out/sample/
 #### File Descriptions
 
 **footprints.geojson**
+
 - Standard GeoJSON FeatureCollection
 - Each feature = one building
 - `geometry`: 2D polygon footprint (reprojected to EPSG:3857)
 - `properties`: `{ id: "...", height_m: <number> }`
 
 **index.bin**
+
 - The serialized Flatbush index (bounding boxes only)
 - Enables fast spatial queries in the browser
 
 **ids.json**
+
 - Array of building IDs in the same order as index.bin
 - Maps Flatbush search result indices back to building IDs
 
 **buildings.draco.glb**
+
 - Draco-compressed glTF binary
 - Contains either extruded prisms (LOD1) or full LOD2 roofs/walls
 - Loadable directly in Three.js using GLTFLoader + DRACOLoader

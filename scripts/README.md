@@ -44,20 +44,24 @@ out/sample/
 #### What each file is for:
 
 **footprints.geojson**
+
 - Standard GeoJSON FeatureCollection
 - Each feature = one building
 - `geometry`: 2D polygon footprint (reprojected to EPSG:3857)
 - `properties`: `{ id: "...", height_m: <number> }`
 
 **index.bin**
+
 - The serialized Flatbush index (bounding boxes only)
 - Lets you quickly ask "which buildings intersect this query box?" in the browser
 
 **ids.json**
+
 - Array of building IDs in the same order as index.bin
 - Lets you map a Flatbush search result index back to a building's ID (and then to geometry/feature)
 
 **buildings.draco.glb**
+
 - Draco-compressed glTF binary
 - Contains either extruded prisms (default) or full LOD2 roofs/walls (--lod2)
 - Loadable directly in Three.js using GLTFLoader + DRACOLoader

@@ -7,6 +7,7 @@ This directory contains tools for processing NYC CityGML data as part of the 3D 
 The tools implement **Step 2** of the NYC building visualization plan: extracting useful parts from raw CityGML files.
 
 ### What it does:
+
 - Parses CityGML XML files containing building data
 - Extracts building footprints (2D ground outlines)
 - Calculates building heights from roof coordinates
@@ -16,6 +17,7 @@ The tools implement **Step 2** of the NYC building visualization plan: extractin
 ## Files
 
 ### Core Extraction Script
+
 - **`extract-citygml.ts`** - Main CityGML parsing and extraction logic
   - Parses XML using `fast-xml-parser`
   - Extracts building geometry from various CityGML surface types
@@ -23,6 +25,7 @@ The tools implement **Step 2** of the NYC building visualization plan: extractin
   - Outputs standardized building data format
 
 ### Sample Generation Script
+
 - **`create-sample.ts`** - Creates 5% samples of GML files for testing
   - Uses streaming approach to handle large files efficiently
   - Processes individual DA files or all files at once
@@ -32,6 +35,7 @@ The tools implement **Step 2** of the NYC building visualization plan: extractin
   - Can handle files up to 1.3GB without memory issues
 
 ### Test Infrastructure
+
 - **`_tests/extract-citygml.test.ts`** - Comprehensive test suite
   - Tests parsing logic with sample CityGML data
   - Validates building extraction, geometry, and coordinates
@@ -41,6 +45,7 @@ The tools implement **Step 2** of the NYC building visualization plan: extractin
 ## Usage
 
 ### Basic Extraction
+
 ```bash
 # Extract from default directory
 npm run extract
@@ -50,6 +55,7 @@ npm run extract ./path/to/citygml/files ./path/to/output.json
 ```
 
 ### NYC Project Example
+
 This project contains NYC CityGML data organized by delivery areas:
 
 ```bash
@@ -74,6 +80,7 @@ npm run extract ./data/complete/DA2_3D_Buildings_Merged.gml ./data/da2-buildings
 ```
 
 **Data Structure:**
+
 - **Location**: `./data/complete/`
 - **Format**: 20 delivery area files (DA1-DA20) with 3D building data
 - **File sizes**: 208MB - 1.3GB per file (total ~12GB)
@@ -81,6 +88,7 @@ npm run extract ./data/complete/DA2_3D_Buildings_Merged.gml ./data/da2-buildings
 - **Naming**: `DA{number}_3D_Buildings_Merged.gml`
 
 **Processing Tips:**
+
 - Start with smaller files (DA1, DA2, DA4) for testing
 - Larger files (DA19, DA20) may take longer to process but are handled efficiently
 - Use `npm run extract:all` to process all DA files in one command
@@ -88,6 +96,7 @@ npm run extract ./data/complete/DA2_3D_Buildings_Merged.gml ./data/da2-buildings
 - Sample generation uses streaming to handle all file sizes without memory issues
 
 ### Running Tests
+
 ```bash
 # Run the main test suite
 npm test
@@ -97,6 +106,7 @@ npm run test:all
 ```
 
 ### Direct Script Execution
+
 ```bash
 # Run extraction script directly
 npx tsx tools/extract-citygml.ts [input-dir] [output-file]
@@ -139,12 +149,12 @@ Each extracted building is represented as:
 
 ```typescript
 interface ExtractedBuilding {
-  id: string;                    // Building identifier
-  footprint: number[][];         // 2D coordinates [x, y]
-  height: number;                // Building height in units
-  walls?: number[][][];          // 3D wall polygons [[x, y, z], ...]
-  roof?: number[][][];           // 3D roof polygons [[x, y, z], ...]
-  ground?: number[][][];         // 3D ground polygons [[x, y, z], ...]
+  id: string; // Building identifier
+  footprint: number[][]; // 2D coordinates [x, y]
+  height: number; // Building height in units
+  walls?: number[][][]; // 3D wall polygons [[x, y, z], ...]
+  roof?: number[][][]; // 3D roof polygons [[x, y, z], ...]
+  ground?: number[][][]; // 3D ground polygons [[x, y, z], ...]
 }
 ```
 
@@ -157,18 +167,23 @@ interface ExtractedBuilding {
 ## Development
 
 ### Adding New Tests
+
 1. Create test file in `_tests/` directory
 2. Add test function to `run-tests.ts`
 3. Update `package.json` scripts if needed
 
 ### Extending Functionality
+
 The extraction script is designed to be extensible:
+
 - Add new surface types by extending `CityGMLSurface` interface
 - Add new geometry types by extending `CityGMLGeometry` interface
 - Modify output format by updating `ExtractedBuilding` interface
 
 ### Debugging
+
 The script includes detailed logging when parsing fails. Check console output for:
+
 - Parsed XML structure
 - Building member extraction
 - Geometry processing steps
@@ -176,6 +191,7 @@ The script includes detailed logging when parsing fails. Check console output fo
 ## Next Steps
 
 This extracted data feeds into:
+
 1. **Coordinate conversion** (EPSG:2263 → EPSG:3857)
 2. **GLB mesh generation** (3D geometry → Three.js format)
 3. **Spatial indexing** (building lookup optimization)
@@ -186,11 +202,41 @@ This extracted data feeds into:
 [
   {
     "id": "building_001",
-    "footprint": [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]],
+    "footprint": [
+      [0, 0],
+      [10, 0],
+      [10, 10],
+      [0, 10],
+      [0, 0]
+    ],
     "height": 20,
-    "walls": [[[0, 0, 0], [0, 0, 20], [0, 10, 20], [0, 10, 0], [0, 0, 0]]],
-    "roof": [[[0, 0, 20], [10, 0, 20], [10, 10, 20], [0, 10, 20], [0, 0, 20]]],
-    "ground": [[[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 0]]]
+    "walls": [
+      [
+        [0, 0, 0],
+        [0, 0, 20],
+        [0, 10, 20],
+        [0, 10, 0],
+        [0, 0, 0]
+      ]
+    ],
+    "roof": [
+      [
+        [0, 0, 20],
+        [10, 0, 20],
+        [10, 10, 20],
+        [0, 10, 20],
+        [0, 0, 20]
+      ]
+    ],
+    "ground": [
+      [
+        [0, 0, 0],
+        [10, 0, 0],
+        [10, 10, 0],
+        [0, 10, 0],
+        [0, 0, 0]
+      ]
+    ]
   }
 ]
 ```

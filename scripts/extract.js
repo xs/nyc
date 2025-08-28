@@ -21,21 +21,39 @@ if (argv.includes('--help') || argv.includes('-h')) {
   console.log('==========================');
   console.log('');
   console.log('Usage:');
-  console.log('  npm run extract                                    # Use defaults (data/sample -> out/sample)');
+  console.log(
+    '  npm run extract                                    # Use defaults (data/sample -> out/sample)'
+  );
   console.log('  npm run extract -- --in data/sample --out out/sample');
-  console.log('  npm run extract -- --in data/complete --out out/complete --lod2');
-  console.log('  npm run extract -- --in data/sample/DA1_3D_Buildings_Merged_Sample.gml --out out/single');
+  console.log(
+    '  npm run extract -- --in data/complete --out out/complete --lod2'
+  );
+  console.log(
+    '  npm run extract -- --in data/sample/DA1_3D_Buildings_Merged_Sample.gml --out out/single'
+  );
   console.log('');
   console.log('Arguments:');
-  console.log('  --in <directory>    Input directory containing CityGML files (default: data/sample)');
-  console.log('  --out <directory>   Output directory for glTF files (default: out/sample)');
-  console.log('  --lod2              Use LOD2 geometry instead of LOD1 (default: LOD1)');
-  console.log('  --single            Process only the first file found (useful for testing)');
+  console.log(
+    '  --in <directory>    Input directory containing CityGML files (default: data/sample)'
+  );
+  console.log(
+    '  --out <directory>   Output directory for glTF files (default: out/sample)'
+  );
+  console.log(
+    '  --lod2              Use LOD2 geometry instead of LOD1 (default: LOD1)'
+  );
+  console.log(
+    '  --single            Process only the first file found (useful for testing)'
+  );
   console.log('  -h, --help          Show this help message');
   console.log('');
   console.log('Examples:');
-  console.log('  npm run extract                                    # Process data/sample with defaults');
-  console.log('  npm run extract -- --in data/complete --out out/complete --lod2');
+  console.log(
+    '  npm run extract                                    # Process data/sample with defaults'
+  );
+  console.log(
+    '  npm run extract -- --in data/complete --out out/complete --lod2'
+  );
   console.log('  npm run extract -- --in data/sample --out out/test --single');
   console.log('');
   process.exit(0);
@@ -58,8 +76,6 @@ const IN_DIR = arg('in', './data/sample');
 const OUT_DIR = arg('out', './out/sample');
 const LOD2 = !!arg('lod2', false);
 
-
-
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
 /* =========================
@@ -75,7 +91,10 @@ const CENTER_LAT = 40.71671893970987;
 const CENTER_LNG = -73.96201793555863;
 
 // Transform center point to EPSG:3857
-const centerMercator = proj4('EPSG:4326', 'EPSG:3857').forward([CENTER_LNG, CENTER_LAT]);
+const centerMercator = proj4('EPSG:4326', 'EPSG:3857').forward([
+  CENTER_LNG,
+  CENTER_LAT,
+]);
 
 const toMerc = proj4('EPSG:2263', 'EPSG:3857');
 const FT_TO_M = 0.3048;
@@ -116,7 +135,8 @@ function* walk(node) {
 function posListToXYZ(text) {
   const a = text.trim().split(/\s+/).map(Number);
   const out = [];
-  for (let i = 0; i + 2 < a.length; i += 3) out.push([a[i], a[i + 1], a[i + 2]]);
+  for (let i = 0; i + 2 < a.length; i += 3)
+    out.push([a[i], a[i + 1], a[i + 2]]);
   return out;
 }
 
@@ -214,14 +234,14 @@ function triangulate3D(rings3D) {
     }
     outIdx[i] = remap.get(k);
   }
-  
+
   // Fix winding order for correct normals (reverse triangles)
   for (let i = 0; i < outIdx.length; i += 3) {
     const temp = outIdx[i];
     outIdx[i] = outIdx[i + 2];
     outIdx[i + 2] = temp;
   }
-  
+
   return { positions: new Float32Array(positions), indices: outIdx };
 }
 
@@ -259,7 +279,10 @@ function extrudeFootprint(footprint, height) {
     indices.push(bT, bB, aB);
   }
 
-  return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
+  return {
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+  };
 }
 
 function bbox2D(coords) {
@@ -284,7 +307,8 @@ function containsTag(node, name) {
     if (nsLocal(k) === name) return true;
     const v = node[k];
     if (Array.isArray(v)) {
-      for (const c of v) if (c && typeof c === 'object' && containsTag(c, name)) return true;
+      for (const c of v)
+        if (c && typeof c === 'object' && containsTag(c, name)) return true;
     } else if (v && typeof v === 'object') {
       if (containsTag(v, name)) return true;
     }
@@ -293,7 +317,8 @@ function containsTag(node, name) {
 }
 
 function findLinearRing(container) {
-  const lr = container['gml:LinearRing'] || container['LinearRing'] || container;
+  const lr =
+    container['gml:LinearRing'] || container['LinearRing'] || container;
   const pos = lr?.['gml:posList'] || lr?.['posList'];
   if (typeof pos === 'string') return posListToXYZ(pos);
   return null;
@@ -318,7 +343,11 @@ function extractPolygons(node) {
       }
 
       const interiors = poly['gml:interior'] || poly['interior'];
-      const intrArr = Array.isArray(interiors) ? interiors : interiors ? [interiors] : [];
+      const intrArr = Array.isArray(interiors)
+        ? interiors
+        : interiors
+          ? [interiors]
+          : [];
       for (const intr of intrArr) {
         const lr = findLinearRing(intr);
         if (lr) rings.push(lr);
@@ -366,10 +395,13 @@ function processGMLSync(filePath, { lod2 }) {
     // Check if this is a building node - look specifically for bldg:Building elements
     if (node['gml:id'] && node['gml:id'].startsWith('gml_')) {
       // Check if this node represents a building by looking for building-specific tags
-      const hasBuildingTag = Object.keys(node).some(key => key === 'bldg:Building');
-      const hasBuildingName = node['gml:name'] && node['gml:name'].startsWith('Bldg_');
+      const hasBuildingTag = Object.keys(node).some(
+        (key) => key === 'bldg:Building'
+      );
+      const hasBuildingName =
+        node['gml:name'] && node['gml:name'].startsWith('Bldg_');
       const hasBuildingAttributes = containsTag(node, 'gen:stringAttribute');
-      
+
       if (hasBuildingTag || hasBuildingName || hasBuildingAttributes) {
         currentBuildingId = node['gml:id'];
         continue;
@@ -390,7 +422,10 @@ function processGMLSync(filePath, { lod2 }) {
 
     // Use current building ID or fallback to element's own ID
     // Fix: Use a unique counter that increments for each geometric element to avoid duplicates
-    const buildingId = currentBuildingId || node['gml:id'] || `b_${buildingGroups.size}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const buildingId =
+      currentBuildingId ||
+      node['gml:id'] ||
+      `b_${buildingGroups.size}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     if (!buildingGroups.has(buildingId)) {
       buildingGroups.set(buildingId, []);
@@ -400,7 +435,7 @@ function processGMLSync(filePath, { lod2 }) {
 
   // Process each building group and deduplicate by footprint
   const footprintToBuilding = new Map(); // footprint key -> building
-  
+
   for (const [buildingId, elements] of buildingGroups) {
     // Calculate overall height from all elements
     let zmin = Infinity,
@@ -472,21 +507,27 @@ function processGMLSync(filePath, { lod2 }) {
 
     // Create footprint key for deduplication
     const footprintKey = JSON.stringify(mainFootprint);
-    
+
     // Check if we already have a building with this footprint
     if (footprintToBuilding.has(footprintKey)) {
-      console.log(`Skipping duplicate building ${buildingId} (same footprint as ${footprintToBuilding.get(footprintKey).id})`);
+      console.log(
+        `Skipping duplicate building ${buildingId} (same footprint as ${footprintToBuilding.get(footprintKey).id})`
+      );
       continue;
     }
 
-    const b = { id: buildingId, footprint: mainFootprint, height_m: +height_m.toFixed(2) };
+    const b = {
+      id: buildingId,
+      footprint: mainFootprint,
+      height_m: +height_m.toFixed(2),
+    };
 
     if (lod2) {
       // Merge all LOD2 geometries for this building
       const pos = [];
       const idx = [];
       let offset = 0;
-      
+
       for (const element of elements) {
         for (const rings of element.polys) {
           const rings3D = rings.map((r) =>
@@ -497,13 +538,17 @@ function processGMLSync(filePath, { lod2 }) {
           );
           const { positions, indices } = triangulate3D(rings3D);
           for (let i = 0; i < positions.length; i++) pos.push(positions[i]);
-          for (let i = 0; i < indices.length; i++) idx.push(indices[i] + offset);
+          for (let i = 0; i < indices.length; i++)
+            idx.push(indices[i] + offset);
           offset += positions.length / 3;
         }
       }
-      
+
       if (pos.length >= 9 && idx.length >= 3) {
-        b.mesh = { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
+        b.mesh = {
+          positions: new Float32Array(pos),
+          indices: new Uint32Array(idx),
+        };
       }
     } else {
       // extruded massing
@@ -527,7 +572,10 @@ function writeFootprintsGeoJSON(buildings, outPath) {
     properties: { id: b.id, height_m: b.height_m },
     geometry: { type: 'Polygon', coordinates: [b.footprint] },
   }));
-  fs.writeFileSync(outPath, JSON.stringify({ type: 'FeatureCollection', features }));
+  fs.writeFileSync(
+    outPath,
+    JSON.stringify({ type: 'FeatureCollection', features })
+  );
 }
 
 function writeFlatbushIndex(buildings, outBin, outIds) {
@@ -541,47 +589,52 @@ function writeFlatbushIndex(buildings, outBin, outIds) {
   // flatbush@4 exposes Uint8Array at idx.data
   const data = idx.data;
   // Ensure we serialize the right buffer bytes
-  const buf = data.buffer instanceof ArrayBuffer ? Buffer.from(data) : Buffer.from(data);
+  const buf =
+    data.buffer instanceof ArrayBuffer ? Buffer.from(data) : Buffer.from(data);
   fs.writeFileSync(outBin, buf);
   fs.writeFileSync(outIds, JSON.stringify(buildings.map((b) => b.id)));
 }
 
 function writeGLB(buildings, outGlb) {
-  console.log(`Writing GLB with ${buildings.filter(b => b.mesh).length} meshes`);
+  console.log(
+    `Writing GLB with ${buildings.filter((b) => b.mesh).length} meshes`
+  );
   console.log(`Output path: ${outGlb}`);
-  
+
   try {
-    const buildingsWithMeshes = buildings.filter(b => b.mesh);
+    const buildingsWithMeshes = buildings.filter((b) => b.mesh);
     if (buildingsWithMeshes.length === 0) {
       console.log('No buildings with meshes found');
       return;
     }
-    
+
     console.log(`Creating GLB with ${buildingsWithMeshes.length} buildings`);
-    
+
     // Calculate building centers and centered positions for proper positioning
     const buildingCenters = [];
     const centeredPositions = [];
-    
+
     for (const building of buildingsWithMeshes) {
       const positions = building.mesh.positions;
-      let centerX = 0, centerY = 0, centerZ = 0;
-      
+      let centerX = 0,
+        centerY = 0,
+        centerZ = 0;
+
       for (let i = 0; i < positions.length; i += 3) {
         centerX += positions[i];
         centerY += positions[i + 1];
         centerZ += positions[i + 2];
       }
-      
+
       const vertexCount = positions.length / 3;
       const center = {
         x: centerX / vertexCount,
         y: centerY / vertexCount,
-        z: centerZ / vertexCount
+        z: centerZ / vertexCount,
       };
-      
+
       buildingCenters.push(center);
-      
+
       // Center the geometry around origin for proper node positioning
       const centered = new Float32Array(positions.length);
       for (let j = 0; j < positions.length; j += 3) {
@@ -591,142 +644,160 @@ function writeGLB(buildings, outGlb) {
       }
       centeredPositions.push(centered);
     }
-    
+
     // Create GLB structure for all buildings with proper transformations
     const gltf = {
-      asset: { version: "2.0" },
+      asset: { version: '2.0' },
       scene: 0,
       scenes: [{ nodes: buildingsWithMeshes.map((_, i) => i) }],
       nodes: buildingsWithMeshes.map((_, i) => {
         const center = buildingCenters[i];
         return {
           mesh: i,
-          translation: [center.x, center.y, center.z]
+          translation: [center.x, center.y, center.z],
         };
       }),
       meshes: buildingsWithMeshes.map(() => ({
-        primitives: [{
-          attributes: { POSITION: 0 },
-          indices: 1
-        }]
+        primitives: [
+          {
+            attributes: { POSITION: 0 },
+            indices: 1,
+          },
+        ],
       })),
       accessors: [],
       bufferViews: [],
-      buffers: [{
-        byteLength: 0 // Will be calculated
-      }]
+      buffers: [
+        {
+          byteLength: 0, // Will be calculated
+        },
+      ],
     };
-    
+
     // Calculate total buffer size and create accessors/bufferViews
     let byteOffset = 0;
     let accessorIndex = 0;
     let bufferViewIndex = 0;
-    
+
     for (let i = 0; i < buildingsWithMeshes.length; i++) {
       const building = buildingsWithMeshes[i];
       const centered = centeredPositions[i];
       const positionsLength = centered.length * 4;
       const indicesLength = building.mesh.indices.length * 4;
-      
+
       // Update mesh to use correct accessor indices
-      gltf.meshes[accessorIndex].primitives[0].attributes.POSITION = accessorIndex * 2;
+      gltf.meshes[accessorIndex].primitives[0].attributes.POSITION =
+        accessorIndex * 2;
       gltf.meshes[accessorIndex].primitives[0].indices = accessorIndex * 2 + 1;
-      
+
       // Create position accessor with centered bounds
       gltf.accessors.push({
         bufferView: bufferViewIndex,
         componentType: 5126, // FLOAT
         count: centered.length / 3,
-        type: "VEC3",
-        max: [Math.max(...centered.filter((_, i) => i % 3 === 0)),
-              Math.max(...centered.filter((_, i) => i % 3 === 1)),
-              Math.max(...centered.filter((_, i) => i % 3 === 2))],
-        min: [Math.min(...centered.filter((_, i) => i % 3 === 0)),
-              Math.min(...centered.filter((_, i) => i % 3 === 1)),
-              Math.min(...centered.filter((_, i) => i % 3 === 2))]
+        type: 'VEC3',
+        max: [
+          Math.max(...centered.filter((_, i) => i % 3 === 0)),
+          Math.max(...centered.filter((_, i) => i % 3 === 1)),
+          Math.max(...centered.filter((_, i) => i % 3 === 2)),
+        ],
+        min: [
+          Math.min(...centered.filter((_, i) => i % 3 === 0)),
+          Math.min(...centered.filter((_, i) => i % 3 === 1)),
+          Math.min(...centered.filter((_, i) => i % 3 === 2)),
+        ],
       });
-      
+
       // Create position bufferView
       gltf.bufferViews.push({
         buffer: 0,
         byteOffset: byteOffset,
-        byteLength: positionsLength
+        byteLength: positionsLength,
       });
-      
+
       byteOffset += positionsLength;
       bufferViewIndex++;
-      
+
       // Create indices accessor
       gltf.accessors.push({
         bufferView: bufferViewIndex,
         componentType: 5125, // UNSIGNED_INT
         count: building.mesh.indices.length,
-        type: "SCALAR"
+        type: 'SCALAR',
       });
-      
+
       // Create indices bufferView
       gltf.bufferViews.push({
         buffer: 0,
         byteOffset: byteOffset,
-        byteLength: indicesLength
+        byteLength: indicesLength,
       });
-      
+
       byteOffset += indicesLength;
       bufferViewIndex++;
       accessorIndex++;
     }
-    
+
     // Update buffer byteLength
     gltf.buffers[0].byteLength = byteOffset;
-    
+
     // Convert to JSON
     const jsonString = JSON.stringify(gltf);
     const jsonBuffer = Buffer.from(jsonString, 'utf8');
-    
+
     // Pad JSON to 4-byte boundary
     const jsonPadding = (4 - (jsonBuffer.length % 4)) % 4;
-    const paddedJsonBuffer = Buffer.concat([jsonBuffer, Buffer.alloc(jsonPadding)]);
-    
+    const paddedJsonBuffer = Buffer.concat([
+      jsonBuffer,
+      Buffer.alloc(jsonPadding),
+    ]);
+
     // Create binary data for all buildings with centered geometry
     const binaryBuffers = [];
     for (let i = 0; i < buildingsWithMeshes.length; i++) {
       const building = buildingsWithMeshes[i];
       const centered = centeredPositions[i];
-      
+
       binaryBuffers.push(Buffer.from(centered.buffer));
       binaryBuffers.push(Buffer.from(building.mesh.indices.buffer));
     }
     const binaryBuffer = Buffer.concat(binaryBuffers);
-    
+
     // Pad binary to 4-byte boundary
     const binaryPadding = (4 - (binaryBuffer.length % 4)) % 4;
-    const paddedBinaryBuffer = Buffer.concat([binaryBuffer, Buffer.alloc(binaryPadding)]);
-    
+    const paddedBinaryBuffer = Buffer.concat([
+      binaryBuffer,
+      Buffer.alloc(binaryPadding),
+    ]);
+
     // Create GLB header (12 bytes)
     const header = Buffer.alloc(12);
-    header.writeUInt32LE(0x46546C67, 0); // "glTF"
+    header.writeUInt32LE(0x46546c67, 0); // "glTF"
     header.writeUInt32LE(2, 4); // version
-    header.writeUInt32LE(12 + paddedJsonBuffer.length + paddedBinaryBuffer.length, 8); // total length
-    
+    header.writeUInt32LE(
+      12 + paddedJsonBuffer.length + paddedBinaryBuffer.length,
+      8
+    ); // total length
+
     // Create JSON chunk header (8 bytes)
     const jsonChunkHeader = Buffer.alloc(8);
     jsonChunkHeader.writeUInt32LE(paddedJsonBuffer.length, 0);
-    jsonChunkHeader.writeUInt32LE(0x4E4F534A, 4); // "JSON"
-    
+    jsonChunkHeader.writeUInt32LE(0x4e4f534a, 4); // "JSON"
+
     // Create binary chunk header (8 bytes)
     const binaryChunkHeader = Buffer.alloc(8);
     binaryChunkHeader.writeUInt32LE(paddedBinaryBuffer.length, 0);
-    binaryChunkHeader.writeUInt32LE(0x004E4942, 4); // "BIN"
-    
+    binaryChunkHeader.writeUInt32LE(0x004e4942, 4); // "BIN"
+
     // Combine all parts
     const glbBuffer = Buffer.concat([
       header,
       jsonChunkHeader,
       paddedJsonBuffer,
       binaryChunkHeader,
-      paddedBinaryBuffer
+      paddedBinaryBuffer,
     ]);
-    
+
     fs.writeFileSync(outGlb, glbBuffer);
     console.log('GLB write completed successfully');
     console.log(`GLB file size: ${glbBuffer.length} bytes`);
@@ -736,14 +807,12 @@ function writeGLB(buildings, outGlb) {
   }
 }
 
-
-
 /* =========================
    Main
    ========================= */
 (async () => {
   let files = [];
-  
+
   // Check if IN_DIR is a file or directory
   if (fs.statSync(IN_DIR).isFile()) {
     // Single file input
@@ -755,13 +824,16 @@ function writeGLB(buildings, outGlb) {
     }
   } else {
     // Directory input
-    files = fs.readdirSync(IN_DIR).filter((f) => f.endsWith('.gml')).sort();
+    files = fs
+      .readdirSync(IN_DIR)
+      .filter((f) => f.endsWith('.gml'))
+      .sort();
     if (!files.length) {
       console.error(`No .gml in ${IN_DIR}`);
       process.exit(1);
     }
     // Convert to full paths
-    files = files.map(f => path.join(IN_DIR, f));
+    files = files.map((f) => path.join(IN_DIR, f));
   }
 
   const all = [];

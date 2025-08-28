@@ -13,7 +13,6 @@ Heights (from the Z values of the roof polygons).
 
 Optionally the full 3D walls/roofs
 
-
 next, run extract-citygml.ts on the files in data/sample/, and have them output to files in a new directory out/sample/.
 
 before we do that, make sure that extract-citygml.ts uses the streaming approach we decided on before
