@@ -180,6 +180,24 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
         }
         counter++;
       } else if (inBuilding) {
+        // Early skip check - if we're skipping this building, only process closing tags
+        if (skipBuildingLines) {
+          if (line.includes('<bldg:') && !line.includes('</bldg:')) {
+            buildingDepth++;
+          } else if (line.includes('</bldg:')) {
+            buildingDepth--;
+            if (buildingDepth === 0) {
+              // Building complete - reset for next building
+              currentBuilding = [];
+              inBuilding = false;
+              currentBuildingInManhattan = false;
+              buildingCoordinates = null;
+              skipBuildingLines = false;
+            }
+          }
+          return; // Skip all other processing for this building
+        }
+        
         // Extract coordinates for borough filtering (only if we haven't found any yet)
         if (boroughFilter && !buildingCoordinates && (line.includes('<gml:posList') || line.includes('<gml:pos'))) {
           buildingCoordinates = extractCoordinates(line);
@@ -190,16 +208,15 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
             // Early skip: if building is outside Manhattan and we have coordinates, skip the rest
             if (!currentBuildingInManhattan) {
               // Fast-forward through the building until we find the closing tag
-              // We'll set a flag to skip adding lines until building is complete
               skipBuildingLines = true;
+              // Don't add this line to currentBuilding since we're skipping
+              return;
             }
           }
         }
         
-        // Only add lines to currentBuilding if we're not skipping this building
-        if (!skipBuildingLines) {
-          currentBuilding.push(line);
-        }
+        // Add line to currentBuilding (we know we're not skipping at this point)
+        currentBuilding.push(line);
         
         if (line.includes('<bldg:') && !line.includes('</bldg:')) {
           buildingDepth++;
