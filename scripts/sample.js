@@ -48,6 +48,78 @@ function isInManhattanBounds(coords) {
   });
 }
 
+// Extract boundedBy envelope from GML file (streaming version)
+async function extractBoundedByEnvelopeStreaming(inputFile) {
+  return new Promise((resolve) => {
+    // Read only the first 1MB to find the boundedBy section
+    const fileStream = fs.createReadStream(inputFile, { 
+      encoding: 'utf8',
+      highWaterMark: 64 * 1024, // 64KB buffer
+      start: 0,
+      end: 1024 * 1024 // Read only first 1MB
+    });
+    
+    let buffer = '';
+    
+    fileStream.on('data', (chunk) => {
+      buffer += chunk;
+    });
+    
+    fileStream.on('end', () => {
+      const envelope = extractBoundedByEnvelope(buffer);
+      resolve(envelope);
+    });
+    
+    fileStream.on('error', () => {
+      resolve(null);
+    });
+  });
+}
+
+// Extract boundedBy envelope from GML file (legacy version for small files)
+function extractBoundedByEnvelope(gmlText) {
+  const boundedByMatch = gmlText.match(/<gml:boundedBy>[\s\S]*?<gml:Envelope[^>]*>[\s\S]*?<gml:lowerCorner>([^<]+)<\/gml:lowerCorner>[\s\S]*?<gml:upperCorner>([^<]+)<\/gml:upperCorner>[\s\S]*?<\/gml:Envelope>[\s\S]*?<\/gml:boundedBy>/);
+  if (boundedByMatch) {
+    const lowerCorner = boundedByMatch[1].trim().split(/\s+/).map(Number);
+    const upperCorner = boundedByMatch[2].trim().split(/\s+/).map(Number);
+    return {
+      minX: lowerCorner[0],
+      minY: lowerCorner[1],
+      maxX: upperCorner[0],
+      maxY: upperCorner[1]
+    };
+  }
+  return null;
+}
+
+// Check if envelope is entirely outside our bounding filter
+function isEnvelopeOutsideFilter(envelope, boroughFilter, customPolygonEPSG2263) {
+  if (!envelope) return false; // If no envelope, we can't skip the file
+  
+  if (boroughFilter) {
+    // Check if envelope is entirely outside Manhattan bounds
+    return envelope.maxX < MANHATTAN_BOUNDS.minX || 
+           envelope.minX > MANHATTAN_BOUNDS.maxX || 
+           envelope.maxY < MANHATTAN_BOUNDS.minY || 
+           envelope.minY > MANHATTAN_BOUNDS.maxY;
+  } else if (customPolygonEPSG2263) {
+    // For custom polygon, we need to check if envelope is entirely outside polygon bounds
+    // This is a simplified check - we could make it more precise
+    const polygonBounds = {
+      minX: Math.min(...customPolygonEPSG2263.map(p => p[0])),
+      maxX: Math.max(...customPolygonEPSG2263.map(p => p[0])),
+      minY: Math.min(...customPolygonEPSG2263.map(p => p[1])),
+      maxY: Math.max(...customPolygonEPSG2263.map(p => p[1]))
+    };
+    return envelope.maxX < polygonBounds.minX || 
+           envelope.minX > polygonBounds.maxX || 
+           envelope.maxY < polygonBounds.minY || 
+           envelope.minY > polygonBounds.maxY;
+  }
+  
+  return false;
+}
+
 // Convert Manhattan polygon to EPSG:2263 coordinates
 const MANHATTAN_POLYGON_EPSG2263 = MANHATTAN_LATLNG.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
 
@@ -122,8 +194,9 @@ function extractCoordinates(gmlText) {
   if (posListMatch) {
     const coords = posListMatch[1].trim().split(/\s+/).map(Number);
     const points = [];
-    for (let i = 0; i < coords.length; i += 2) {
-      points.push([coords[i], coords[i + 1]]);
+    // GML coordinates are X/Y/Z triplets, so we skip every third coordinate (Z)
+    for (let i = 0; i < coords.length; i += 3) {
+      points.push([coords[i], coords[i + 1]]); // X, Y only
     }
     return points;
   }
@@ -132,7 +205,7 @@ function extractCoordinates(gmlText) {
   if (posMatches) {
     return posMatches.map(match => {
       const coords = match.replace(/<gml:pos[^>]*>([^<]+)<\/gml:pos>/, '$1').trim().split(/\s+/).map(Number);
-      return [coords[0], coords[1]];
+      return [coords[0], coords[1]]; // X, Y only (ignore Z)
     });
   }
   
@@ -147,6 +220,24 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
     const stats = fs.statSync(inputFile);
     const fileSizeMB = (stats.size / 1024 / 1024).toFixed(1);
     console.log(`📁 File size: ${fileSizeMB} MB`);
+    
+    // Early boundedBy check for spatial filtering
+    if (boroughFilter || customPolygonEPSG2263) {
+      const envelope = await extractBoundedByEnvelopeStreaming(inputFile);
+      
+      if (envelope) {
+        console.log(`🗺️  File envelope: X[${envelope.minX.toFixed(0)}-${envelope.maxX.toFixed(0)}], Y[${envelope.minY.toFixed(0)}-${envelope.maxY.toFixed(0)}]`);
+        
+        if (isEnvelopeOutsideFilter(envelope, boroughFilter, customPolygonEPSG2263)) {
+          console.log(`⏭️  File envelope entirely outside filter bounds - skipping file`);
+          // Create empty output file
+          fs.writeFileSync(outputFile, '');
+          return { buildingCount: 0, selectedCount: 0 };
+        }
+      } else {
+        console.log(`⚠️  No boundedBy envelope found - processing entire file`);
+      }
+    }
     
     // Create read stream with larger buffer size
     const fileStream = fs.createReadStream(inputFile, { 
