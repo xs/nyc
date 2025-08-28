@@ -62,7 +62,6 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
       // Write header lines directly to output file
       if (!headerComplete && (line.includes('<core:cityObjectMember>') || line.includes('<cityObjectMember>'))) {
         headerComplete = true;
-        console.log(`🔍 Header complete at line ${lineCount}`);
         // Don't include this line in header - we'll add our own cityObjectMember tags
         return;
       }
@@ -74,9 +73,6 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
       
       // Now we're past the header, look for buildings
       if (!inBuilding && line.includes('<bldg:Building gml:id=')) {
-        if (buildingCount === 0) {
-          console.log(`🔍 First building found at line ${lineCount}: ${line.substring(0, 100)}...`);
-        }
         inBuilding = true;
         buildingDepth = 1;
         currentBuilding = ['  <cityObjectMember>', line]; // Start with cityObjectMember tag
