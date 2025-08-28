@@ -472,7 +472,18 @@ async function writeGLB(buildings, outGlb) {
   // doc.createExtension(KHRDracoMeshCompression).setRequired(true);
 
   const io = new NodeIO(); // .registerExtensions([KHRDracoMeshCompression]);
-  await io.write(outGlb, doc);
+  
+  // Add logging to debug the issue
+  console.log(`Writing GLB with ${buildings.filter(b => b.mesh).length} meshes`);
+  console.log(`Output path: ${outGlb}`);
+  
+  try {
+    await io.write(outGlb, doc);
+    console.log('GLB write completed successfully');
+  } catch (error) {
+    console.log(`GLB write error details: ${error.stack}`);
+    throw error;
+  }
 }
 
 /* =========================
