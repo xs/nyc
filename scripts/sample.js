@@ -2,7 +2,65 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 
-async function createSampleFromFile(inputFile, outputFile, percent = 1) {
+// Manhattan borough polygon coordinates (lat, lng)
+// ['(40.69338,-74.02154)', '(40.70360,-74.00009)', '(40.71021,-73.97083)', '(40.74587,-73.96747)', 
+//  '(40.77425,-73.94167)', '(40.78228,-73.94033)', '(40.79185,-73.93049)', '(40.80192,-73.92736)', 
+//  '(40.80865,-73.93318)', '(40.82045,-73.93379)', '(40.83443,-73.93441)', '(40.84575,-73.92854)', 
+//  '(40.85732,-73.91997)', '(40.86546,-73.91218)', '(40.87192,-73.90980)', '(40.87388,-73.91149)', 
+//  '(40.87621,-73.92103)', '(40.87806,-73.92369)', '(40.87858,-73.93236)', '(40.84290,-73.95531)', 
+//  '(40.75411,-74.01612)', '(40.77699,-74.00033)']
+//
+// Converted to GML format for point-in-polygon testing
+const MANHATTAN_POLYGON = [
+  [-74.02154, 40.69338], [-74.00009, 40.70360], [-73.97083, 40.71021], [-73.96747, 40.74587],
+  [-73.94167, 40.77425], [-73.94033, 40.78228], [-73.93049, 40.79185], [-73.92736, 40.80192],
+  [-73.93318, 40.80865], [-73.93379, 40.82045], [-73.93441, 40.83443], [-73.92854, 40.84575],
+  [-73.91997, 40.85732], [-73.91218, 40.86546], [-73.90980, 40.87192], [-73.91149, 40.87388],
+  [-73.92103, 40.87621], [-73.92369, 40.87806], [-73.93236, 40.87858], [-73.95531, 40.84290],
+  [-74.01612, 40.75411], [-74.00033, 40.77699]
+];
+
+// Point-in-polygon test using ray casting algorithm
+function pointInPolygon(point, polygon) {
+  const [x, y] = point;
+  let inside = false;
+  
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  
+  return inside;
+}
+
+// Extract coordinates from GML posList or pos elements
+function extractCoordinates(gmlText) {
+  const posListMatch = gmlText.match(/<gml:posList[^>]*>([^<]+)<\/gml:posList>/);
+  if (posListMatch) {
+    const coords = posListMatch[1].trim().split(/\s+/).map(Number);
+    const points = [];
+    for (let i = 0; i < coords.length; i += 2) {
+      points.push([coords[i], coords[i + 1]]);
+    }
+    return points;
+  }
+  
+  const posMatches = gmlText.match(/<gml:pos[^>]*>([^<]+)<\/gml:pos>/g);
+  if (posMatches) {
+    return posMatches.map(match => {
+      const coords = match.replace(/<gml:pos[^>]*>([^<]+)<\/gml:pos>/, '$1').trim().split(/\s+/).map(Number);
+      return [coords[0], coords[1]];
+    });
+  }
+  
+  return null;
+}
+
+async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughFilter = false) {
   console.log(`Processing: ${path.basename(inputFile)}`);
   
   try {
@@ -31,6 +89,8 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
     let counter = 0;
     let headerComplete = false;
     let headerWritten = false;
+    let currentBuildingInManhattan = false;
+    let buildingCoordinates = null;
     
     // Create output file and write header immediately
     const outputStream = fs.createWriteStream(outputFile);
@@ -77,6 +137,8 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
         buildingDepth = 1;
         currentBuilding = ['  <cityObjectMember>', line]; // Start with cityObjectMember tag
         buildingCount++;
+        currentBuildingInManhattan = false;
+        buildingCoordinates = null;
         
         // Estimate total buildings (rough approximation) - only on first building
         if (buildingCount === 1) {
@@ -95,6 +157,17 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
       } else if (inBuilding) {
         currentBuilding.push(line);
         
+        // Extract coordinates for borough filtering
+        if (boroughFilter && !buildingCoordinates && (line.includes('<gml:posList') || line.includes('<gml:pos'))) {
+          buildingCoordinates = extractCoordinates(line);
+          if (buildingCoordinates && buildingCoordinates.length > 0) {
+            // Check if any point of the building is in Manhattan
+            currentBuildingInManhattan = buildingCoordinates.some(coord => 
+              pointInPolygon(coord, MANHATTAN_POLYGON)
+            );
+          }
+        }
+        
         if (line.includes('<bldg:') && !line.includes('</bldg:')) {
           buildingDepth++;
         } else if (line.includes('</bldg:')) {
@@ -102,11 +175,16 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
           if (buildingDepth === 0) {
             // Building complete
             if (selectedBuildings.length > 0 && selectedBuildings[selectedBuildings.length - 1] === currentBuilding[1]) {
-              currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
-              buildingLines.push(...currentBuilding);
+              // Only include building if it's in Manhattan (when borough filter is enabled)
+              if (!boroughFilter || currentBuildingInManhattan) {
+                currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
+                buildingLines.push(...currentBuilding);
+              }
             }
             currentBuilding = [];
             inBuilding = false;
+            currentBuildingInManhattan = false;
+            buildingCoordinates = null;
           }
         }
       }
@@ -193,7 +271,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1) {
   }
 }
 
-async function processAllFiles(percent = 1, skipOnError = false) {
+async function processAllFiles(percent = 1, skipOnError = false, boroughFilter = false) {
   const completeDir = 'data/complete';
   const sampleDir = 'data/sample';
   
@@ -222,6 +300,7 @@ async function processAllFiles(percent = 1, skipOnError = false) {
   let totalSampleSize = 0;
   let processedCount = 0;
   let failedCount = 0;
+  let statusEmojis = [];
   
   // Process each file
   for (let i = 0; i < gmlFiles.length; i++) {
@@ -234,23 +313,40 @@ async function processAllFiles(percent = 1, skipOnError = false) {
       console.log(`Processing file ${i + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
       
-      const result = await createSampleFromFile(inputFile, outputFile, percent);
-      results.push({
-        file: gmlFile,
-        ...result
-      });
+      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter);
       
-      totalOriginalBuildings += result.originalBuildings;
-      totalSampleBuildings += result.sampleBuildings;
-      totalOriginalSize += result.originalSize;
-      totalSampleSize += result.sampleSize;
-      processedCount++;
-      
-      console.log(`✅ Successfully processed ${gmlFile}`);
+      // Check if we have any buildings in the sample
+      if (result.sampleBuildings > 0) {
+        results.push({
+          file: gmlFile,
+          ...result
+        });
+        
+        totalOriginalBuildings += result.originalBuildings;
+        totalSampleBuildings += result.sampleBuildings;
+        totalOriginalSize += result.originalSize;
+        totalSampleSize += result.sampleSize;
+        processedCount++;
+        statusEmojis.push('✅');
+        
+        console.log(`✅ Successfully processed ${gmlFile} (${result.sampleBuildings} buildings)`);
+      } else {
+        // No buildings in Manhattan, but still consider it a success
+        processedCount++;
+        statusEmojis.push('🏙️'); // Building emoji for "no buildings in Manhattan"
+        
+        console.log(`🏙️ Processed ${gmlFile} (no buildings in Manhattan)`);
+        
+        // Remove the output file if it's empty
+        if (fs.existsSync(outputFile)) {
+          fs.unlinkSync(outputFile);
+        }
+      }
       
     } catch (error) {
       console.error(`❌ Failed to process ${gmlFile}:`, error.message);
       failedCount++;
+      statusEmojis.push('❌');
       
       if (skipOnError) {
         console.log(`⏭️  Skipping to next file...`);
@@ -273,6 +369,10 @@ async function processAllFiles(percent = 1, skipOnError = false) {
   console.log(`Total buildings: ${totalOriginalBuildings.toLocaleString()} → ${totalSampleBuildings.toLocaleString()} (${((totalSampleBuildings / totalOriginalBuildings) * 100).toFixed(1)}%)`);
   console.log(`Total size: ${(totalOriginalSize / 1024 / 1024 / 1024).toFixed(1)} GB → ${(totalSampleSize / 1024 / 1024).toFixed(1)} MB`);
   console.log(`Overall size reduction: ${((totalOriginalSize - totalSampleSize) / totalOriginalSize * 100).toFixed(1)}%`);
+  
+  // Add emoji status row
+  const emojiRow = statusEmojis.join('');
+  console.log(`\n📊 Status: ${emojiRow}`);
   
   console.log('\n📁 Sample files created in: data/sample/');
   results.forEach(result => {
@@ -301,6 +401,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  -p, --pct, --percent <number>  Sampling percentage (default: 1)');
   console.log('  --all, -a                     Process all DA files in data/complete/');
   console.log('  --skip-on-error               Continue processing other files on error (default: exit)');
+  console.log('  --borough                     Filter to Manhattan borough only');
   console.log('  -h, --help                    Show this help message');
   console.log('');
   console.log('Examples:');
@@ -309,6 +410,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  npm run sample -- --idx 1,2,3 --pct 5                     # Process DA1, DA2, DA3 with 5% sampling');
   console.log('  npm run sample -- --all --pct 2                           # Process all files with 2% sampling');
   console.log('  npm run sample -- --all --skip-on-error                   # Process all files, skip errors');
+  console.log('  npm run sample -- --all --borough                         # Process all files, Manhattan only');
   console.log('');
   console.log('Note: Uses streaming approach to handle large files efficiently.');
   process.exit(0);
@@ -337,6 +439,7 @@ const indexArg = getArg('idx', ['index', 'i']);
 const percentArg = getArg('pct', ['percent', 'p'], '1');
 const processAll = args.includes('--all') || args.includes('-a');
 const skipOnError = args.includes('--skip-on-error');
+const boroughFilter = args.includes('--borough');
 
 // Validate arguments
 if (!indexArg && !processAll) {
@@ -372,7 +475,10 @@ if (processAll) {
   if (skipOnError) {
     console.log(`⚠️  --skip-on-error flag enabled: will continue processing on errors`);
   }
-  processAllFiles(percent, skipOnError)
+  if (boroughFilter) {
+    console.log(`🗽 --borough flag enabled: filtering to Manhattan only`);
+  }
+  processAllFiles(percent, skipOnError, boroughFilter)
     .then((result) => {
       if (result.processedCount === result.totalFiles) {
         console.log('\n✅ All files processed successfully!');
@@ -392,6 +498,9 @@ if (processAll) {
   if (skipOnError) {
     console.log(`⚠️  --skip-on-error flag enabled: will continue processing on errors`);
   }
+  if (boroughFilter) {
+    console.log(`🗽 --borough flag enabled: filtering to Manhattan only`);
+  }
   
   // Ensure sample directory exists
   if (!fs.existsSync('data/sample')) {
@@ -400,6 +509,7 @@ if (processAll) {
   
   let processedCount = 0;
   let failedCount = 0;
+  let statusEmojis = [];
   
   // Process each DA number sequentially
   for (let i = 0; i < daNumbers.length; i++) {
@@ -412,6 +522,7 @@ if (processAll) {
       console.error(`❌ Input file not found: ${inputFile}`);
       if (skipOnError) {
         failedCount++;
+        statusEmojis.push('❌');
         continue;
       } else {
         process.exit(1);
@@ -423,12 +534,28 @@ if (processAll) {
     console.log(`Output: ${outputFile}`);
     
     try {
-      await createSampleFromFile(inputFile, outputFile, percent);
-      console.log(`✅ Successfully processed DA${daNumber}!`);
-      processedCount++;
+      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter);
+      
+      // Check if we have any buildings in the sample
+      if (result.sampleBuildings > 0) {
+        processedCount++;
+        statusEmojis.push('✅');
+        console.log(`✅ Successfully processed DA${daNumber}! (${result.sampleBuildings} buildings)`);
+      } else {
+        // No buildings in Manhattan, but still consider it a success
+        processedCount++;
+        statusEmojis.push('🏙️'); // Building emoji for "no buildings in Manhattan"
+        console.log(`🏙️ Processed DA${daNumber} (no buildings in Manhattan)`);
+        
+        // Remove the output file if it's empty
+        if (fs.existsSync(outputFile)) {
+          fs.unlinkSync(outputFile);
+        }
+      }
     } catch (error) {
       console.error(`❌ Failed to process DA${daNumber}:`, error.message);
       failedCount++;
+      statusEmojis.push('❌');
       
       if (skipOnError) {
         console.log(`⏭️  Skipping to next file...`);
@@ -440,7 +567,10 @@ if (processAll) {
     }
   }
   
-  // Final message
+  // Final message with emoji status
+  const emojiRow = statusEmojis.join('');
+  console.log(`\n📊 Status: ${emojiRow}`);
+  
   if (processedCount === daNumbers.length) {
     console.log('\n✅ All specified files processed successfully!');
   } else if (failedCount > 0) {
