@@ -38,9 +38,40 @@ function latLngToEPSG2263(lat, lng) {
 // Convert Manhattan polygon to EPSG:2263 coordinates
 const MANHATTAN_POLYGON_EPSG2263 = MANHATTAN_LATLNG.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
 
+// Parse polygon string from command line argument
+function parsePolygonString(polyString) {
+  try {
+    // Remove quotes and split by commas
+    const cleanString = polyString.replace(/['"]/g, '');
+    const coordPairs = cleanString.split('),(');
+    
+    const polygon = [];
+    for (const pair of coordPairs) {
+      // Remove parentheses and split by comma
+      const cleanPair = pair.replace(/[()]/g, '');
+      const [lat, lng] = cleanPair.split(',').map(Number);
+      
+      if (isNaN(lat) || isNaN(lng)) {
+        throw new Error(`Invalid coordinate: ${pair}`);
+      }
+      
+      polygon.push([lat, lng]);
+    }
+    
+    return polygon;
+  } catch (error) {
+    throw new Error(`Failed to parse polygon: ${error.message}`);
+  }
+}
+
 // Point-in-polygon check for Manhattan
 function isInManhattan(coords) {
   return coords.some(coord => pointInPolygon(coord, MANHATTAN_POLYGON_EPSG2263));
+}
+
+// Point-in-polygon check for custom polygon
+function isInCustomPolygon(coords, polygonEPSG2263) {
+  return coords.some(coord => pointInPolygon(coord, polygonEPSG2263));
 }
 
 // Point-in-polygon test using ray casting algorithm
@@ -58,6 +89,17 @@ function pointInPolygon(point, polygon) {
   }
   
   return inside;
+}
+
+// Generate output directory name based on parameters
+function generateOutputDirName(percent, boroughFilter, customPolygon) {
+  if (customPolygon) {
+    return `poly-${percent}`;
+  } else if (boroughFilter) {
+    return percent === 100 ? 'manhattan-all' : `manhattan-${percent}`;
+  } else {
+    return `nyc-${percent}`;
+  }
 }
 
 // Extract coordinates from GML posList or pos elements
@@ -83,7 +125,7 @@ function extractCoordinates(gmlText) {
   return null;
 }
 
-async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughFilter = false) {
+async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughFilter = false, customPolygonEPSG2263 = null) {
   console.log(`Processing: ${path.basename(inputFile)}`);
   
   try {
@@ -198,15 +240,21 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
           return; // Skip all other processing for this building
         }
         
-        // Extract coordinates for borough filtering (only if we haven't found any yet)
-        if (boroughFilter && !buildingCoordinates && (line.includes('<gml:posList') || line.includes('<gml:pos'))) {
+        // Extract coordinates for filtering (only if we haven't found any yet)
+        if ((boroughFilter || customPolygonEPSG2263) && !buildingCoordinates && (line.includes('<gml:posList') || line.includes('<gml:pos'))) {
           buildingCoordinates = extractCoordinates(line);
           if (buildingCoordinates && buildingCoordinates.length > 0) {
-            // Check if any point of the building is in Manhattan
-            currentBuildingInManhattan = isInManhattan(buildingCoordinates);
+            // Check if any point of the building is in the target area
+            let inTargetArea = false;
+            if (customPolygonEPSG2263) {
+              inTargetArea = isInCustomPolygon(buildingCoordinates, customPolygonEPSG2263);
+            } else {
+              inTargetArea = isInManhattan(buildingCoordinates);
+            }
+            currentBuildingInManhattan = inTargetArea;
             
-            // Early skip: if building is outside Manhattan and we have coordinates, skip the rest
-            if (!currentBuildingInManhattan) {
+            // Early skip: if building is outside target area and we have coordinates, skip the rest
+            if (!inTargetArea) {
               // Fast-forward through the building until we find the closing tag
               skipBuildingLines = true;
               // Don't add this line to currentBuilding since we're skipping
@@ -225,8 +273,8 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
           if (buildingDepth === 0) {
             // Building complete
             if (selectedBuildings.length > 0 && selectedBuildings[selectedBuildings.length - 1] === currentBuilding[1]) {
-              // Only include building if it's in Manhattan (when borough filter is enabled)
-              if (!boroughFilter || currentBuildingInManhattan) {
+                          // Only include building if it's in the target area (when filtering is enabled)
+            if (!(boroughFilter || customPolygonEPSG2263) || currentBuildingInManhattan) {
                 currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
                 buildingLines.push(...currentBuilding);
               }
@@ -322,27 +370,35 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
   }
 }
 
-async function processAllFiles(percent = 1, skipOnError = false, boroughFilter = false) {
+async function processAllFiles(percent = 1, skipOnError = false, boroughFilter = false, customPolygonEPSG2263 = null, outputDirName = null, specificDANumbers = null) {
   const completeDir = 'data/complete';
-  const sampleDir = 'data/sample';
+  const sampleDir = outputDirName ? `data/${outputDirName}` : 'data/sample';
   
   // Ensure sample directory exists
   if (!fs.existsSync(sampleDir)) {
     fs.mkdirSync(sampleDir, { recursive: true });
   }
   
-  // Get all GML files
-  const gmlFiles = fs.readdirSync(completeDir)
-    .filter((file) => file.endsWith('.gml'))
-    .sort((a, b) => {
-      // Sort by DA number (DA1, DA2, ..., DA20)
-      const aNum = parseInt(a.match(/DA(\d+)/)?.[1] || '0');
-      const bNum = parseInt(b.match(/DA(\d+)/)?.[1] || '0');
-      return aNum - bNum;
-    });
-  
-  console.log(`Found ${gmlFiles.length} GML files to process:`);
-  gmlFiles.forEach((file) => console.log(`  - ${file}`));
+  // Get GML files to process
+  let gmlFiles;
+  if (specificDANumbers) {
+    // Process specific DA numbers
+    gmlFiles = specificDANumbers.map(daNum => `DA${daNum}_3D_Buildings_Merged.gml`);
+    console.log(`Processing ${gmlFiles.length} specified DA files:`);
+    gmlFiles.forEach((file) => console.log(`  - ${file}`));
+  } else {
+    // Process all GML files
+    gmlFiles = fs.readdirSync(completeDir)
+      .filter((file) => file.endsWith('.gml'))
+      .sort((a, b) => {
+        // Sort by DA number (DA1, DA2, ..., DA20)
+        const aNum = parseInt(a.match(/DA(\d+)/)?.[1] || '0');
+        const bNum = parseInt(b.match(/DA(\d+)/)?.[1] || '0');
+        return aNum - bNum;
+      });
+    console.log(`Found ${gmlFiles.length} GML files to process:`);
+    gmlFiles.forEach((file) => console.log(`  - ${file}`));
+  }
   
   const results = [];
   let totalOriginalBuildings = 0;
@@ -364,7 +420,7 @@ async function processAllFiles(percent = 1, skipOnError = false, boroughFilter =
       console.log(`Processing file ${i + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
       
-      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter);
+      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter, customPolygonEPSG2263);
       
       // Check if we have any buildings in the sample
       if (result.sampleBuildings > 0) {
@@ -453,6 +509,8 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  --all, -a                     Process all DA files in data/complete/');
   console.log('  --skip-on-error               Continue processing other files on error (default: exit)');
   console.log('  --borough                     Filter to Manhattan borough only');
+  console.log('  --poly <polygon>              Filter to custom polygon (lat,lng format)');
+  console.log('  --output-dir <name>           Custom output directory name');
   console.log('  -h, --help                    Show this help message');
   console.log('');
   console.log('Examples:');
@@ -462,6 +520,8 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  npm run sample -- --all --pct 2                           # Process all files with 2% sampling');
   console.log('  npm run sample -- --all --skip-on-error                   # Process all files, skip errors');
   console.log('  npm run sample -- --all --borough                         # Process all files, Manhattan only');
+  console.log('  npm run sample -- --all --poly "(lat1,lng1),(lat2,lng2)"  # Process all files, custom polygon');
+  console.log('  npm run sample -- --all --borough --output-dir manhattan  # Custom output directory');
   console.log('');
   console.log('Note: Uses streaming approach to handle large files efficiently.');
   process.exit(0);
@@ -491,12 +551,33 @@ const percentArg = getArg('pct', ['percent', 'p'], '1');
 const processAll = args.includes('--all') || args.includes('-a');
 const skipOnError = args.includes('--skip-on-error');
 const boroughFilter = args.includes('--borough');
+const polyArg = getArg('poly');
+const outputDirArg = getArg('output-dir');
 
 // Validate arguments
 if (!indexArg && !processAll) {
   console.error('❌ Error: Must specify either --idx <numbers> or --all');
   console.log('Use --help for usage information.');
   process.exit(1);
+}
+
+// Validate polygon and borough filter mutual exclusivity
+if (boroughFilter && polyArg) {
+  console.error('❌ Error: Cannot use both --borough and --poly. Use one or the other.');
+  process.exit(1);
+}
+
+// Parse and validate polygon if provided
+let customPolygonEPSG2263 = null;
+if (polyArg) {
+  try {
+    const customPolygon = parsePolygonString(polyArg);
+    customPolygonEPSG2263 = customPolygon.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
+    console.log(`🗺️  Custom polygon loaded with ${customPolygon.length} points`);
+  } catch (error) {
+    console.error(`❌ Error parsing polygon: ${error.message}`);
+    process.exit(1);
+  }
 }
 
 // Parse percentage
@@ -521,6 +602,9 @@ if (indexArg) {
 
 
 
+// Generate output directory name
+const outputDirName = outputDirArg || generateOutputDirName(percent, boroughFilter, customPolygonEPSG2263);
+
 if (processAll) {
   console.log(`🚀 Processing all DA files with ${percent}% sampling...`);
   if (skipOnError) {
@@ -529,7 +613,11 @@ if (processAll) {
   if (boroughFilter) {
     console.log(`🗽 --borough flag enabled: filtering to Manhattan only`);
   }
-  processAllFiles(percent, skipOnError, boroughFilter)
+  if (customPolygonEPSG2263) {
+    console.log(`🗺️  Custom polygon filter enabled`);
+  }
+  console.log(`📁 Output directory: data/${outputDirName}`);
+  processAllFiles(percent, skipOnError, boroughFilter, customPolygonEPSG2263, outputDirName, null)
     .then((result) => {
       if (result.processedCount === result.totalFiles) {
         console.log('\n✅ All files processed successfully!');
@@ -552,81 +640,23 @@ if (processAll) {
   if (boroughFilter) {
     console.log(`🗽 --borough flag enabled: filtering to Manhattan only`);
   }
-  
-  // Ensure sample directory exists
-  if (!fs.existsSync('data/sample')) {
-    fs.mkdirSync('data/sample', { recursive: true });
+  if (customPolygonEPSG2263) {
+    console.log(`🗺️  Custom polygon filter enabled`);
   }
+  console.log(`📁 Output directory: data/${outputDirName}`);
   
-  let processedCount = 0;
-  let failedCount = 0;
-  let statusEmojis = [];
-  
-  // Process each DA number sequentially
-  for (let i = 0; i < daNumbers.length; i++) {
-    const daNumber = daNumbers[i];
-    const inputFile = `data/complete/DA${daNumber}_3D_Buildings_Merged.gml`;
-    const outputFile = `data/sample/DA${daNumber}_3D_Buildings_Merged_Sample.gml`;
-    
-    // Check if input file exists
-    if (!fs.existsSync(inputFile)) {
-      console.error(`❌ Input file not found: ${inputFile}`);
-      if (skipOnError) {
-        failedCount++;
-        statusEmojis.push('❌');
-        continue;
+  processAllFiles(percent, skipOnError, boroughFilter, customPolygonEPSG2263, outputDirName, daNumbers)
+    .then((result) => {
+      if (result.processedCount === result.totalFiles) {
+        console.log('\n✅ All files processed successfully!');
+      } else if (result.failedCount > 0) {
+        console.log(`\n⚠️  Processing completed with ${result.failedCount} failures.`);
       } else {
-        process.exit(1);
+        console.log('\n✅ All files processed successfully!');
       }
-    }
-    
-    console.log(`\nProcessing DA${daNumber}...`);
-    console.log(`Input: ${inputFile}`);
-    console.log(`Output: ${outputFile}`);
-    
-    try {
-      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter);
-      
-      // Check if we have any buildings in the sample
-      if (result.sampleBuildings > 0) {
-        processedCount++;
-        statusEmojis.push('✅');
-        console.log(`✅ Successfully processed DA${daNumber}! (${result.sampleBuildings} buildings)`);
-      } else {
-        // No buildings in Manhattan, but still consider it a success
-        processedCount++;
-        statusEmojis.push('🏙️'); // Building emoji for "no buildings in Manhattan"
-        console.log(`🏙️ Processed DA${daNumber} (no buildings in Manhattan)`);
-        
-        // Remove the output file if it's empty
-        if (fs.existsSync(outputFile)) {
-          fs.unlinkSync(outputFile);
-        }
-      }
-    } catch (error) {
-      console.error(`❌ Failed to process DA${daNumber}:`, error.message);
-      failedCount++;
-      statusEmojis.push('❌');
-      
-      if (skipOnError) {
-        console.log(`⏭️  Skipping to next file...`);
-        continue;
-      } else {
-        console.error(`\n❌ Processing stopped due to error. Use --skip-on-error to continue processing other files.`);
-        process.exit(1);
-      }
-    }
-  }
-  
-  // Final message with emoji status
-  const emojiRow = statusEmojis.join('');
-  console.log(`\n📊 Status: ${emojiRow}`);
-  
-  if (processedCount === daNumbers.length) {
-    console.log('\n✅ All specified files processed successfully!');
-  } else if (failedCount > 0) {
-    console.log(`\n⚠️  Processing completed with ${failedCount} failures.`);
-  } else {
-    console.log('\n✅ All specified files processed successfully!');
-  }
+    })
+    .catch((error) => {
+      console.error('\n❌ Error during batch processing:', error.message);
+      process.exit(1);
+    });
 }
