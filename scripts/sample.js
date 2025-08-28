@@ -2,20 +2,54 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 
-// Manhattan borough polygon coordinates (EPSG:2263 - NAD83 / New York Long Island)
-// Approximate bounding box for Manhattan in EPSG:2263 coordinates
-// These are rough approximations - for production use, convert lat/lng to EPSG:2263
-const MANHATTAN_POLYGON = [
-  [970000, 190000], [980000, 190000], [980000, 200000], [970000, 200000]
+// Manhattan borough polygon coordinates (lat, lng)
+// ['(40.69338,-74.02154)', '(40.70360,-74.00009)', '(40.71021,-73.97083)', '(40.74587,-73.96747)', 
+//  '(40.77425,-73.94167)', '(40.78228,-73.94033)', '(40.79185,-73.93049)', '(40.80192,-73.92736)', 
+//  '(40.80865,-73.93318)', '(40.82045,-73.93379)', '(40.83443,-73.93441)', '(40.84575,-73.92854)', 
+//  '(40.85732,-73.91997)', '(40.86546,-73.91218)', '(40.87192,-73.90980)', '(40.87388,-73.91149)', 
+//  '(40.87621,-73.92103)', '(40.87806,-73.92369)', '(40.87858,-73.93236)', '(40.84290,-73.95531)', 
+//  '(40.75411,-74.01612)', '(40.77699,-74.00033)']
+const MANHATTAN_LATLNG = [
+  [40.69338, -74.02154], [40.70360, -74.00009], [40.71021, -73.97083], [40.74587, -73.96747],
+  [40.77425, -73.94167], [40.78228, -73.94033], [40.79185, -73.93049], [40.80192, -73.92736],
+  [40.80865, -73.93318], [40.82045, -73.93379], [40.83443, -73.93441], [40.84575, -73.92854],
+  [40.85732, -73.91997], [40.86546, -73.91218], [40.87192, -73.90980], [40.87388, -73.91149],
+  [40.87621, -73.92103], [40.87806, -73.92369], [40.87858, -73.93236], [40.84290, -73.95531],
+  [40.75411, -74.01612], [40.77699, -74.00033]
 ];
 
-// Check if coordinates are within Manhattan bounds
+// Convert lat/lng to EPSG:2263 (NAD83 / New York Long Island)
+// This is a simplified transformation - for production use, use a proper geodetic library
+function latLngToEPSG2263(lat, lng) {
+  // Simplified transformation coefficients for NYC area
+  // These are approximate - for accuracy, use proj4js or similar
+  const lat0 = 40.7128; // NYC latitude
+  const lng0 = -74.0060; // NYC longitude
+  const scale = 111320; // meters per degree (approximate)
+  
+  // Convert to meters from NYC center
+  const x = (lng - lng0) * scale * Math.cos(lat0 * Math.PI / 180);
+  const y = (lat - lat0) * scale;
+  
+  // Offset to EPSG:2263 origin (approximate)
+  return [x + 1000000, y + 200000];
+}
+
+// Convert Manhattan polygon to EPSG:2263 coordinates
+const MANHATTAN_POLYGON_EPSG2263 = MANHATTAN_LATLNG.map(([lat, lng]) => latLngToEPSG2263(lat, lng));
+
+// Simple bounding box check (fast)
 function isInManhattanBounds(coords) {
   // Manhattan roughly spans from 995000 to 1005000 in X and 188000 to 200000 in Y (EPSG:2263)
   return coords.some(coord => {
     const [x, y] = coord;
     return x >= 995000 && x <= 1005000 && y >= 188000 && y <= 200000;
   });
+}
+
+// Point-in-polygon check (more accurate but slower)
+function isInManhattanPolygon(coords) {
+  return coords.some(coord => pointInPolygon(coord, MANHATTAN_POLYGON_EPSG2263));
 }
 
 // Point-in-polygon test using ray casting algorithm
@@ -58,7 +92,7 @@ function extractCoordinates(gmlText) {
   return null;
 }
 
-async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughFilter = false) {
+async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughFilter = false, usePolygon = false) {
   console.log(`Processing: ${path.basename(inputFile)}`);
   
   try {
@@ -160,7 +194,11 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
           buildingCoordinates = extractCoordinates(line);
           if (buildingCoordinates && buildingCoordinates.length > 0) {
             // Check if any point of the building is in Manhattan
-            currentBuildingInManhattan = isInManhattanBounds(buildingCoordinates);
+            if (usePolygon) {
+              currentBuildingInManhattan = isInManhattanPolygon(buildingCoordinates);
+            } else {
+              currentBuildingInManhattan = isInManhattanBounds(buildingCoordinates);
+            }
           }
         }
         
@@ -267,7 +305,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, boroughF
   }
 }
 
-async function processAllFiles(percent = 1, skipOnError = false, boroughFilter = false) {
+async function processAllFiles(percent = 1, skipOnError = false, boroughFilter = false, usePolygon = false) {
   const completeDir = 'data/complete';
   const sampleDir = 'data/sample';
   
@@ -309,7 +347,7 @@ async function processAllFiles(percent = 1, skipOnError = false, boroughFilter =
       console.log(`Processing file ${i + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
       
-      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter);
+      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter, usePolygon);
       
       // Check if we have any buildings in the sample
       if (result.sampleBuildings > 0) {
@@ -398,6 +436,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  --all, -a                     Process all DA files in data/complete/');
   console.log('  --skip-on-error               Continue processing other files on error (default: exit)');
   console.log('  --borough                     Filter to Manhattan borough only');
+  console.log('  --polygon                     Use point-in-polygon check (slower but more accurate)');
   console.log('  -h, --help                    Show this help message');
   console.log('');
   console.log('Examples:');
@@ -407,6 +446,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  npm run sample -- --all --pct 2                           # Process all files with 2% sampling');
   console.log('  npm run sample -- --all --skip-on-error                   # Process all files, skip errors');
   console.log('  npm run sample -- --all --borough                         # Process all files, Manhattan only');
+  console.log('  npm run sample -- --all --borough --polygon               # Process all files, Manhattan polygon check');
   console.log('');
   console.log('Note: Uses streaming approach to handle large files efficiently.');
   process.exit(0);
@@ -436,6 +476,7 @@ const percentArg = getArg('pct', ['percent', 'p'], '1');
 const processAll = args.includes('--all') || args.includes('-a');
 const skipOnError = args.includes('--skip-on-error');
 const boroughFilter = args.includes('--borough');
+const usePolygon = args.includes('--polygon');
 
 // Validate arguments
 if (!indexArg && !processAll) {
@@ -472,9 +513,13 @@ if (processAll) {
     console.log(`⚠️  --skip-on-error flag enabled: will continue processing on errors`);
   }
   if (boroughFilter) {
-    console.log(`🗽 --borough flag enabled: filtering to Manhattan only`);
+    if (usePolygon) {
+      console.log(`🗽 --borough flag enabled: filtering to Manhattan only (polygon check)`);
+    } else {
+      console.log(`🗽 --borough flag enabled: filtering to Manhattan only (bounding box)`);
+    }
   }
-  processAllFiles(percent, skipOnError, boroughFilter)
+  processAllFiles(percent, skipOnError, boroughFilter, usePolygon)
     .then((result) => {
       if (result.processedCount === result.totalFiles) {
         console.log('\n✅ All files processed successfully!');
@@ -495,7 +540,11 @@ if (processAll) {
     console.log(`⚠️  --skip-on-error flag enabled: will continue processing on errors`);
   }
   if (boroughFilter) {
-    console.log(`🗽 --borough flag enabled: filtering to Manhattan only`);
+    if (usePolygon) {
+      console.log(`🗽 --borough flag enabled: filtering to Manhattan only (polygon check)`);
+    } else {
+      console.log(`🗽 --borough flag enabled: filtering to Manhattan only (bounding box)`);
+    }
   }
   
   // Ensure sample directory exists
@@ -530,7 +579,7 @@ if (processAll) {
     console.log(`Output: ${outputFile}`);
     
     try {
-      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter);
+      const result = await createSampleFromFile(inputFile, outputFile, percent, boroughFilter, usePolygon);
       
       // Check if we have any buildings in the sample
       if (result.sampleBuildings > 0) {
