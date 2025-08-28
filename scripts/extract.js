@@ -10,6 +10,11 @@ import { Document, NodeIO, WebIO } from '@gltf-transform/core';
 import { KHRDracoMeshCompression } from '@gltf-transform/extensions';
 import { dedup, weld, reorder, quantize } from '@gltf-transform/functions';
 
+// Ensure Buffer is available globally
+if (typeof globalThis.Buffer === 'undefined') {
+  globalThis.Buffer = Buffer;
+}
+
 /* =========================
    CLI
    ========================= */
