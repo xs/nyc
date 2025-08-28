@@ -69,9 +69,23 @@ proj4.defs(
   'EPSG:2263',
   '+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 +y_0=0 +datum=NAD83 +units=us-ft +no_defs'
 );
+
+// Define the center point in lat/lng (Williamsburg area)
+const CENTER_LAT = 40.71671893970987;
+const CENTER_LNG = -73.96201793555863;
+
+// Transform center point to EPSG:3857
+const centerMercator = proj4('EPSG:4326', 'EPSG:3857').forward([CENTER_LNG, CENTER_LAT]);
+
 const toMerc = proj4('EPSG:2263', 'EPSG:3857');
 const FT_TO_M = 0.3048;
-const reprojXY = (x, y) => toMerc.forward([x, y]); // -> [x_m, y_m]
+
+// Modified reprojection function that centers coordinates around the specified point
+const reprojXY = (x, y) => {
+  const [mx, my] = toMerc.forward([x, y]);
+  // Center the coordinates around the specified point
+  return [mx - centerMercator[0], my - centerMercator[1]];
+};
 
 /* =========================
    XML parsing helpers
@@ -200,6 +214,14 @@ function triangulate3D(rings3D) {
     }
     outIdx[i] = remap.get(k);
   }
+  
+  // Fix winding order for correct normals (reverse triangles)
+  for (let i = 0; i < outIdx.length; i += 3) {
+    const temp = outIdx[i];
+    outIdx[i] = outIdx[i + 2];
+    outIdx[i + 2] = temp;
+  }
+  
   return { positions: new Float32Array(positions), indices: outIdx };
 }
 
@@ -224,14 +246,17 @@ function extrudeFootprint(footprint, height) {
   for (let i = 0; i < tri.length; i += 3) {
     indices.push(botBase + tri[i + 2], botBase + tri[i + 1], botBase + tri[i]);
   }
-  // sides
+  // sides (fixed winding order for correct normals)
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     const aT = i,
       bT = j,
       aB = botBase + i,
       bB = botBase + j;
-    indices.push(aT, aB, bT, bT, aB, bB);
+    // First triangle: aT -> bT -> aB (clockwise from outside)
+    indices.push(aT, bT, aB);
+    // Second triangle: bT -> bB -> aB (clockwise from outside)
+    indices.push(bT, bB, aB);
   }
 
   return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
@@ -364,7 +389,8 @@ function processGMLSync(filePath, { lod2 }) {
     if (!polys.length) continue;
 
     // Use current building ID or fallback to element's own ID
-    const buildingId = currentBuildingId || node['gml:id'] || `b_${buildings.length}`;
+    // Fix: Use a unique counter that increments for each geometric element to avoid duplicates
+    const buildingId = currentBuildingId || node['gml:id'] || `b_${buildingGroups.size}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     if (!buildingGroups.has(buildingId)) {
       buildingGroups.set(buildingId, []);
@@ -372,7 +398,9 @@ function processGMLSync(filePath, { lod2 }) {
     buildingGroups.get(buildingId).push({ node, polys });
   }
 
-  // Process each building group
+  // Process each building group and deduplicate by footprint
+  const footprintToBuilding = new Map(); // footprint key -> building
+  
   for (const [buildingId, elements] of buildingGroups) {
     // Calculate overall height from all elements
     let zmin = Infinity,
@@ -442,6 +470,15 @@ function processGMLSync(filePath, { lod2 }) {
 
     if (!mainFootprint) continue;
 
+    // Create footprint key for deduplication
+    const footprintKey = JSON.stringify(mainFootprint);
+    
+    // Check if we already have a building with this footprint
+    if (footprintToBuilding.has(footprintKey)) {
+      console.log(`Skipping duplicate building ${buildingId} (same footprint as ${footprintToBuilding.get(footprintKey).id})`);
+      continue;
+    }
+
     const b = { id: buildingId, footprint: mainFootprint, height_m: +height_m.toFixed(2) };
 
     if (lod2) {
@@ -473,6 +510,8 @@ function processGMLSync(filePath, { lod2 }) {
       b.mesh = extrudeFootprint(mainFootprint, b.height_m);
     }
 
+    // Store this building and its footprint
+    footprintToBuilding.set(footprintKey, b);
     buildings.push(b);
   }
 
@@ -520,12 +559,51 @@ function writeGLB(buildings, outGlb) {
     
     console.log(`Creating GLB with ${buildingsWithMeshes.length} buildings`);
     
-    // Create GLB structure for all buildings
+    // Calculate building centers and centered positions for proper positioning
+    const buildingCenters = [];
+    const centeredPositions = [];
+    
+    for (const building of buildingsWithMeshes) {
+      const positions = building.mesh.positions;
+      let centerX = 0, centerY = 0, centerZ = 0;
+      
+      for (let i = 0; i < positions.length; i += 3) {
+        centerX += positions[i];
+        centerY += positions[i + 1];
+        centerZ += positions[i + 2];
+      }
+      
+      const vertexCount = positions.length / 3;
+      const center = {
+        x: centerX / vertexCount,
+        y: centerY / vertexCount,
+        z: centerZ / vertexCount
+      };
+      
+      buildingCenters.push(center);
+      
+      // Center the geometry around origin for proper node positioning
+      const centered = new Float32Array(positions.length);
+      for (let j = 0; j < positions.length; j += 3) {
+        centered[j] = positions[j] - center.x;
+        centered[j + 1] = positions[j + 1] - center.y;
+        centered[j + 2] = positions[j + 2] - center.z;
+      }
+      centeredPositions.push(centered);
+    }
+    
+    // Create GLB structure for all buildings with proper transformations
     const gltf = {
       asset: { version: "2.0" },
       scene: 0,
       scenes: [{ nodes: buildingsWithMeshes.map((_, i) => i) }],
-      nodes: buildingsWithMeshes.map((_, i) => ({ mesh: i })),
+      nodes: buildingsWithMeshes.map((_, i) => {
+        const center = buildingCenters[i];
+        return {
+          mesh: i,
+          translation: [center.x, center.y, center.z]
+        };
+      }),
       meshes: buildingsWithMeshes.map(() => ({
         primitives: [{
           attributes: { POSITION: 0 },
@@ -544,26 +622,28 @@ function writeGLB(buildings, outGlb) {
     let accessorIndex = 0;
     let bufferViewIndex = 0;
     
-    for (const building of buildingsWithMeshes) {
-      const positionsLength = building.mesh.positions.length * 4;
+    for (let i = 0; i < buildingsWithMeshes.length; i++) {
+      const building = buildingsWithMeshes[i];
+      const centered = centeredPositions[i];
+      const positionsLength = centered.length * 4;
       const indicesLength = building.mesh.indices.length * 4;
       
       // Update mesh to use correct accessor indices
       gltf.meshes[accessorIndex].primitives[0].attributes.POSITION = accessorIndex * 2;
       gltf.meshes[accessorIndex].primitives[0].indices = accessorIndex * 2 + 1;
       
-      // Create position accessor
+      // Create position accessor with centered bounds
       gltf.accessors.push({
         bufferView: bufferViewIndex,
         componentType: 5126, // FLOAT
-        count: building.mesh.positions.length / 3,
+        count: centered.length / 3,
         type: "VEC3",
-        max: [Math.max(...building.mesh.positions.filter((_, i) => i % 3 === 0)),
-              Math.max(...building.mesh.positions.filter((_, i) => i % 3 === 1)),
-              Math.max(...building.mesh.positions.filter((_, i) => i % 3 === 2))],
-        min: [Math.min(...building.mesh.positions.filter((_, i) => i % 3 === 0)),
-              Math.min(...building.mesh.positions.filter((_, i) => i % 3 === 1)),
-              Math.min(...building.mesh.positions.filter((_, i) => i % 3 === 2))]
+        max: [Math.max(...centered.filter((_, i) => i % 3 === 0)),
+              Math.max(...centered.filter((_, i) => i % 3 === 1)),
+              Math.max(...centered.filter((_, i) => i % 3 === 2))],
+        min: [Math.min(...centered.filter((_, i) => i % 3 === 0)),
+              Math.min(...centered.filter((_, i) => i % 3 === 1)),
+              Math.min(...centered.filter((_, i) => i % 3 === 2))]
       });
       
       // Create position bufferView
@@ -607,10 +687,13 @@ function writeGLB(buildings, outGlb) {
     const jsonPadding = (4 - (jsonBuffer.length % 4)) % 4;
     const paddedJsonBuffer = Buffer.concat([jsonBuffer, Buffer.alloc(jsonPadding)]);
     
-    // Create binary data for all buildings
+    // Create binary data for all buildings with centered geometry
     const binaryBuffers = [];
-    for (const building of buildingsWithMeshes) {
-      binaryBuffers.push(Buffer.from(building.mesh.positions.buffer));
+    for (let i = 0; i < buildingsWithMeshes.length; i++) {
+      const building = buildingsWithMeshes[i];
+      const centered = centeredPositions[i];
+      
+      binaryBuffers.push(Buffer.from(centered.buffer));
       binaryBuffers.push(Buffer.from(building.mesh.indices.buffer));
     }
     const binaryBuffer = Buffer.concat(binaryBuffers);
@@ -652,6 +735,8 @@ function writeGLB(buildings, outGlb) {
     throw error;
   }
 }
+
+
 
 /* =========================
    Main

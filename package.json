@@ -6,7 +6,7 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js",
     "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch",
-    "extract": "node scripts/extract.js --in data/sample --out out/sample",
+    "extract": "node scripts/extract.js",
     "sample": "node scripts/sample.js"
   },
   "dependencies": {
