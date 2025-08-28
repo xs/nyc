@@ -161,6 +161,8 @@ const broadPolygonBounds = {
 };
 console.log(`Debug: Broad Manhattan polygon bounds: X[${broadPolygonBounds.minX.toFixed(0)}-${broadPolygonBounds.maxX.toFixed(0)}], Y[${broadPolygonBounds.minY.toFixed(0)}-${broadPolygonBounds.maxY.toFixed(0)}]`);
 
+
+
 // Parse polygon string from command line argument
 function parsePolygonString(polyString) {
   try {
@@ -189,8 +191,19 @@ function parsePolygonString(polyString) {
 
 // Point-in-polygon check for Manhattan
 function isInManhattan(coords) {
-  // Temporary: Use the broader polygon to see if we can capture more buildings
-  return coords.some(coord => pointInPolygon(coord, BROAD_MANHATTAN_POLYGON_EPSG2263));
+  // Try using the original Manhattan polygon coordinates directly (without transformation)
+  // These might already be in EPSG:2263 format
+  const ORIGINAL_MANHATTAN_EPSG2263 = [
+    [978276.777955421, 191894.2114886712], // From the debug output
+    [978704.777955421, 191894.2114886712], // Approximated
+    [978704.777955421, 259375.2114886712], // Approximated
+    [1009196.777955421, 259375.2114886712], // Approximated
+    [1009196.777955421, 191894.2114886712], // Approximated
+    [978276.777955421, 191894.2114886712]  // Close the polygon
+  ];
+  
+  // Use the original polygon coordinates directly
+  return coords.some(coord => pointInPolygon(coord, ORIGINAL_MANHATTAN_EPSG2263));
 }
 
 // Point-in-polygon check for custom polygon
@@ -198,22 +211,44 @@ function isInCustomPolygon(coords, polygonEPSG2263) {
   return coords.some(coord => pointInPolygon(coord, polygonEPSG2263));
 }
 
-// Point-in-polygon test using ray casting algorithm
+// Point-in-polygon test using ray casting algorithm with floating point tolerance
 function pointInPolygon(point, polygon) {
   const [x, y] = point;
   let inside = false;
+  
+  // Floating point tolerance for coordinate comparisons
+  // EPSG:2263 coordinates are in meters, try 100 meters tolerance
+  const EPSILON = 100.0;
   
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     const [xi, yi] = polygon[i];
     const [xj, yj] = polygon[j];
     
-    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
-      inside = !inside;
+    // Handle horizontal edges (avoid division by zero)
+    if (Math.abs(yj - yi) < EPSILON) {
+      // Horizontal edge - check if point is on the edge
+      if (Math.abs(y - yi) < EPSILON && x >= Math.min(xi, xj) - EPSILON && x <= Math.max(xi, xj) + EPSILON) {
+        return true; // Point is on the edge
+      }
+      continue; // Skip horizontal edges for ray casting
+    }
+    
+    // Check if ray intersects edge
+    if ((yi > y + EPSILON) !== (yj > y + EPSILON)) {
+      // Calculate intersection point
+      const intersectX = xi + (xj - xi) * (y - yi) / (yj - yi);
+      
+      // Check if intersection is to the right of the point
+      if (x < intersectX + EPSILON) {
+        inside = !inside;
+      }
     }
   }
   
   return inside;
 }
+
+
 
 // Generate output directory name based on parameters
 function generateOutputDirName(percent, boroughFilter, customPolygon) {
