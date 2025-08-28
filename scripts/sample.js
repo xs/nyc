@@ -2,76 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 
-// Manhattan polygon coordinates (lat, lng)
-const MANHATTAN_POLYGON = [
-  [40.69338, -74.02154], [40.70360, -74.00009], [40.71021, -73.97083],
-  [40.74587, -73.96747], [40.77425, -73.94167], [40.78228, -73.94033],
-  [40.79185, -73.93049], [40.80192, -73.92736], [40.80865, -73.93318],
-  [40.82045, -73.93379], [40.83443, -73.93441], [40.84575, -73.92854],
-  [40.85732, -73.91997], [40.86546, -73.91218], [40.87192, -73.90980],
-  [40.87388, -73.91149], [40.87621, -73.92103], [40.87806, -73.92369],
-  [40.87858, -73.93236], [40.84290, -73.95531], [40.75411, -74.01612],
-  [40.77699, -74.00033]
-];
-
-// Point-in-polygon test using ray casting algorithm
-function pointInPolygon(point, polygon) {
-  const [x, y] = point;
-  let inside = false;
-  
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const [xi, yi] = polygon[i];
-    const [xj, yj] = polygon[j];
-    
-    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
-      inside = !inside;
-    }
-  }
-  
-  return inside;
-}
-
-// Convert EPSG:2263 coordinates to lat/lng (approximate)
-function convertToLatLng(x, y) {
-  // This is a rough approximation - in a real implementation you'd use proper projection
-  // For now, we'll use a simple offset and scale
-  const lat = 40.7128 + (y - 1000000) / 100000; // Rough conversion
-  const lng = -74.0060 + (x - 1000000) / 100000; // Rough conversion
-  return [lat, lng];
-}
-
-// Check if building coordinates are in Manhattan
-function isBuildingInManhattan(buildingLines) {
-  const coordinates = [];
-  
-  // Extract coordinates from building lines
-  for (const line of buildingLines) {
-    if (line.includes('<gml:posList>')) {
-      const match = line.match(/<gml:posList>([^<]+)<\/gml:posList>/);
-      if (match) {
-        const coords = match[1].trim().split(/\s+/).map(Number);
-        for (let i = 0; i < coords.length; i += 3) {
-          if (i + 2 < coords.length) {
-            const [x, y, z] = [coords[i], coords[i + 1], coords[i + 2]];
-            const [lat, lng] = convertToLatLng(x, y);
-            coordinates.push([lat, lng]);
-          }
-        }
-      }
-    }
-  }
-  
-  // Check if any coordinate is in Manhattan
-  for (const coord of coordinates) {
-    if (pointInPolygon(coord, MANHATTAN_POLYGON)) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-async function createSampleFromFile(inputFile, outputFile, percent = 1, borough = false) {
+async function createSampleFromFile(inputFile, outputFile, percent = 1) {
   console.log(`Processing: ${path.basename(inputFile)}`);
   
   try {
@@ -166,16 +97,8 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, borough 
           if (buildingDepth === 0) {
             // Building complete
             if (selectedBuildings.length > 0 && selectedBuildings[selectedBuildings.length - 1] === currentBuilding[1]) {
-              // Check borough filter if enabled
-              let shouldInclude = true;
-              if (borough) {
-                shouldInclude = isBuildingInManhattan(currentBuilding);
-              }
-              
-              if (shouldInclude) {
-                currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
-                buildingLines.push(...currentBuilding);
-              }
+              currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
+              buildingLines.push(...currentBuilding);
             }
             currentBuilding = [];
             inBuilding = false;
@@ -222,7 +145,7 @@ async function createSampleFromFile(inputFile, outputFile, percent = 1, borough 
   }
 }
 
-async function processAllFiles(percent = 1, borough = false) {
+async function processAllFiles(percent = 1) {
   const completeDir = 'data/complete';
   const sampleDir = 'data/sample';
   
@@ -261,7 +184,7 @@ async function processAllFiles(percent = 1, borough = false) {
       console.log(`Processing file ${processedCount + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
       
-      const result = await createSampleFromFile(inputFile, outputFile, percent, borough);
+      const result = await createSampleFromFile(inputFile, outputFile, percent);
       results.push({
         file: gmlFile,
         ...result
@@ -309,13 +232,11 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  npm run sample -- --idx 1                                    # Process DA1');
   console.log('  npm run sample -- --idx 1,2,3                               # Process DA1, DA2, DA3');
   console.log('  npm run sample -- --idx 1,2,3 --pct 5                      # Process with 5% sampling');
-  console.log('  npm run sample -- --idx 1,2,3 --borough                    # Process with Manhattan filter');
   console.log('  npm run sample -- --all                                     # Process all DA files');
   console.log('');
   console.log('Arguments:');
   console.log('  -i, --idx, --index <numbers>  Comma-separated DA numbers to process (e.g., "1,2,3")');
   console.log('  -p, --pct, --percent <number>  Sampling percentage (default: 1)');
-  console.log('  --borough                    Filter buildings to Manhattan only');
   console.log('  --all, -a                     Process all DA files in data/complete/');
   console.log('  -h, --help                    Show this help message');
   console.log('');
@@ -323,7 +244,6 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('  npm run sample -- --idx 1                                   # Process DA1 with 1% sampling');
   console.log('  npm run sample -- --idx 1,2,3                              # Process DA1, DA2, DA3 with 1% sampling');
   console.log('  npm run sample -- --idx 1,2,3 --pct 5                     # Process DA1, DA2, DA3 with 5% sampling');
-  console.log('  npm run sample -- --idx 1,2,3 --borough                    # Process with Manhattan filter');
   console.log('  npm run sample -- --all --pct 2                           # Process all files with 2% sampling');
   console.log('');
   console.log('Note: Uses streaming approach to handle large files efficiently.');
@@ -351,7 +271,6 @@ function getArg(name, aliases = [], defaultValue = undefined) {
 // Parse arguments
 const indexArg = getArg('idx', ['index', 'i']);
 const percentArg = getArg('pct', ['percent', 'p'], '1');
-const borough = args.includes('--borough');
 const processAll = args.includes('--all') || args.includes('-a');
 
 // Validate arguments
@@ -384,8 +303,8 @@ if (indexArg) {
 
 
 if (processAll) {
-  console.log(`🚀 Processing all DA files with ${percent}% sampling${borough ? ' (Manhattan only)' : ''}...`);
-  processAllFiles(percent, borough)
+  console.log(`🚀 Processing all DA files with ${percent}% sampling...`);
+  processAllFiles(percent)
     .then(() => {
       console.log('\n✅ All files processed successfully!');
     })
@@ -395,7 +314,7 @@ if (processAll) {
     });
 } else {
   // Process specific DA numbers
-  console.log(`🚀 Processing DA files: ${daNumbers.join(', ')} with ${percent}% sampling${borough ? ' (Manhattan only)' : ''}...`);
+  console.log(`🚀 Processing DA files: ${daNumbers.join(', ')} with ${percent}% sampling...`);
   
   // Ensure sample directory exists
   if (!fs.existsSync('data/sample')) {
@@ -418,7 +337,7 @@ if (processAll) {
     console.log(`Output: ${outputFile}`);
     
           try {
-        await createSampleFromFile(inputFile, outputFile, percent, borough);
+        await createSampleFromFile(inputFile, outputFile, percent);
         console.log(`✅ Successfully processed DA${daNumber}!`);
       } catch (error) {
         console.error(`❌ Failed to process DA${daNumber}:`, error.message);
