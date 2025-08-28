@@ -480,6 +480,7 @@ async function writeGLB(buildings, outGlb) {
   console.log(`Output path: ${outGlb}`);
   
   try {
+    let meshCount = 0;
     for (const b of buildings) {
       if (!b.mesh) continue;
       
@@ -498,7 +499,10 @@ async function writeGLB(buildings, outGlb) {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.name = b.id;
       scene.add(mesh);
+      meshCount++;
     }
+    
+    console.log(`Added ${meshCount} meshes to scene`);
     
     // Export to GLB
     const exporter = new GLTFExporter();
@@ -507,10 +511,12 @@ async function writeGLB(buildings, outGlb) {
       includeCustomExtensions: false
     };
     
+    console.log('Starting GLB export...');
     const result = await new Promise((resolve, reject) => {
       exporter.parse(scene, resolve, reject, options);
     });
     
+    console.log(`GLB export completed, result size: ${result.byteLength} bytes`);
     fs.writeFileSync(outGlb, Buffer.from(result));
     console.log('GLB write completed successfully');
   } catch (error) {
