@@ -599,7 +599,7 @@ async function processAllFiles(percent = 1, skipOnError = false, boroughFilter =
         processedCount++;
         statusEmojis.push('🏙️'); // Building emoji for "no buildings in Manhattan"
         
-        console.log(`🏙️ Processed ${gmlFile} (no buildings in Manhattan)`);
+        console.log(`🏙️ Processed ${gmlFile} (no buildings in ${customPolygonEPSG2263 ? "given polygon" : "Manhattan"})`);
         
         // Remove the output file if it's empty
         if (fs.existsSync(outputFile)) {
