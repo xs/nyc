@@ -44,7 +44,7 @@ type Polyline = Vec2[];
 // Based on actual building coordinate ranges in EPSG:2263
 // Buildings are in range: X: 995000-1000000, Y: 198000-200000
 // Let's create a polygon that covers this range with some buffer
-type Region = 'manhattan';
+type Region = 'manhattan' | 'downtown';
 
 const REGIONS: Map<Region, Polyline> = new Map<Region, Polyline>([
   [
@@ -67,6 +67,15 @@ const REGIONS: Map<Region, Polyline> = new Map<Region, Polyline>([
       [40.70193, -74.02398],
     ],
   ],
+  [
+    'downtown',
+    [
+      [40.69495, -74.02723],
+      [40.71071, -73.97484],
+      [40.72567, -73.96902],
+      [40.7433, -74.01095],
+    ],
+  ],
 ]);
 
 const REGIONS_EPSG2263: Map<Region, Polyline> = makeEPSG2263Regions();
@@ -82,15 +91,26 @@ function makeEPSG2263Regions(): Map<Region, Polyline> {
 }
 
 // Define EPSG:2263 projection for precise coordinate transformation
-proj4.defs(
-  'EPSG:2263',
-  '+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 +y_0=0 +datum=NAD83 +units=us-ft +no_defs'
-);
+// proj4.defs(
+//   'EPSG:2263',
+//   '+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 +y_0=0 +datum=NAD83 +units=us-ft +no_defs'
+// );
 
 // Convert lat/lng to EPSG:2263 with maximum precision
 function latLngToEPSG2263(latlng: Vec2): Vec2 {
   // Use proj4js for precise coordinate transformation
   const [lat, lng] = latlng;
+
+  // Define EPSG:2263 projection if not already defined
+  try {
+    proj4.defs(
+      'EPSG:2263',
+      '+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 +y_0=0 +datum=NAD83 +units=us-ft +no_defs'
+    );
+  } catch (e) {
+    // Projection might already be defined
+  }
+
   const transformed = proj4('EPSG:4326', 'EPSG:2263', [lng, lat]);
 
   return [transformed[0], transformed[1]];
@@ -273,7 +293,7 @@ async function createSampleFromFile(
   inputFile: string,
   outputFile: string,
   percent: number,
-  chunkSize?: number,
+  chunkSize: number,
   region?: Region,
   polygon?: Polyline
 ): Promise<FilterResult> {
@@ -324,11 +344,11 @@ async function createSampleFromFile(
     let buffer = '';
     let lineCount = 0;
 
-    let buildingLines: string[] = [];
     let currentBuilding: string[] = [];
     let inBuilding = false;
     let buildingDepth = 0;
     let buildingCount = 0;
+    let filteredCount = 0;
     let headerComplete = false;
     let currentBuildingInBoundary = false;
     let buildingPoints: Point[] = [];
@@ -502,30 +522,26 @@ async function createSampleFromFile(
               // Check if this building should be selected based on random sampling
               const positionInGroup = buildingCount % 100;
               if (selectedIndicesSet.has(positionInGroup)) {
-                if (chunkSize) {
-                  // Write building to current chunk
-                  currentBuilding.forEach((buildingLine) => {
-                    currentChunkStream!.write(buildingLine + '\n');
-                  });
-                  buildingsInCurrentChunk++;
+                // Write building to current chunk
+                currentBuilding.forEach((buildingLine) => {
+                  currentChunkStream!.write(buildingLine + '\n');
+                });
+                buildingsInCurrentChunk++;
+                filteredCount++;
 
-                  // Check if we need to start a new chunk
-                  if (buildingsInCurrentChunk >= chunkSize) {
-                    // Close current chunk
-                    currentChunkStream!.write(CITYGML_FOOTER + '\n');
-                    currentChunkStream!.end();
+                // Check if we need to start a new chunk
+                if (buildingsInCurrentChunk >= chunkSize) {
+                  // Close current chunk
+                  currentChunkStream!.write(CITYGML_FOOTER + '\n');
+                  currentChunkStream!.end();
 
-                    console.log(
-                      `✅ Completed chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`
-                    );
+                  console.log(
+                    `✅ Completed chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`
+                  );
 
-                    // Reset for next chunk
-                    buildingsInCurrentChunk = 0;
-                    currentChunkStream = undefined;
-                  }
-                } else {
-                  // Single file mode
-                  buildingLines.push(...currentBuilding);
+                  // Reset for next chunk
+                  buildingsInCurrentChunk = 0;
+                  currentChunkStream = undefined;
                 }
               }
             }
@@ -603,11 +619,8 @@ async function createSampleFromFile(
           );
         }
 
-        const totalSelectedBuildings = buildingLines.filter((line) =>
-          line.includes('<bldg:Building gml:id=')
-        ).length;
         console.log(
-          `Selected ${totalSelectedBuildings} buildings for sample (${chunkCount} chunks)`
+          `Selected ${filteredCount} buildings for sample (${chunkCount} chunks)`
         );
 
         // Wait for the stream to finish writing
@@ -625,20 +638,18 @@ async function createSampleFromFile(
             );
 
             resolve({
-              buildingCount: buildingCount,
-              filteredCount: totalSelectedBuildings,
+              buildingCount,
+              filteredCount,
               originalSize,
-              chunkCount: chunkCount,
+              chunkCount,
             });
           });
         } else {
           resolve({
-            buildingCount: buildingCount,
-            filteredCount: buildingLines.filter((line) =>
-              line.includes('<bldg:Building gml:id=')
-            ).length,
+            buildingCount,
+            filteredCount,
             originalSize: stats.size,
-            chunkCount: chunkCount,
+            chunkCount,
           });
         }
       });
@@ -1070,14 +1081,14 @@ if (regionArg && polygonArg) {
   process.exit(1);
 }
 
-if (regionArg && !(regionArg in REGIONS)) {
+if (regionArg && !(REGIONS.keys() as unknown as string[]).includes(regionArg)) {
   console.error(
-    `❌ Error: Invalid region name: ${regionArg}. Valid options are: ${Object.keys(REGIONS).join(', ')}`
+    `❌ Error: Invalid region name: ${regionArg}. Valid options are: ${Array.from(REGIONS.keys()).join(', ')}`
   );
   process.exit(1);
 }
 
-let region = regionArg as Region | undefined;
+let region: Region | undefined = regionArg as Region | undefined;
 
 // Parse and validate polygon if provided
 let polygon = undefined;
