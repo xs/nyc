@@ -6,7 +6,7 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js",
     "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch",
-    "extract": "npx run scripts/extract.js",
+    "extract": "tsx scripts/extract.ts",
     "sample": "tsx scripts/sample.ts",
     "test": "vitest run",
     "test:watch": "vitest",
