@@ -1,5 +1,5 @@
 import readline from 'readline';
-import fs, { read } from 'fs';
+import fs from 'fs';
 import path from 'path';
 import proj4 from 'proj4';
 
@@ -28,36 +28,58 @@ const CITYGML_NAMESPACES = {
 };
 
 // Construct XML header
-const CITYGML_HEADER = `<?xml version="1.0" encoding="UTF-8"?>
+const CITYGML_HEADER: string = `<?xml version="1.0" encoding="UTF-8"?>
 <core:CityModel ${Object.entries(CITYGML_NAMESPACES)
   .map(([ns, url]) => `xmlns:${ns}="${url}"`)
   .join(' ')}>`;
 
 const CITYGML_FOOTER = '</CityModel>';
 
+type Vec2 = [number, number];
+type Vec3 = [number, number, number];
+type Point = Vec2 | Vec3;
+type Polyline = Vec2[];
+
 // Named region polygon coordinates (lat, lng)
 // Based on actual building coordinate ranges in EPSG:2263
 // Buildings are in range: X: 995000-1000000, Y: 198000-200000
 // Let's create a polygon that covers this range with some buffer
-const REGIONS = {
-  manhattan: [
-    [40.6988, -74.01355],
-    [40.71161, -73.97322],
-    [40.75516, -73.96023],
-    [40.77962, -73.9376],
-    [40.78787, -73.93593],
-    [40.7974, -73.92768],
-    [40.80455, -73.92994],
-    [40.80977, -73.93323],
-    [40.83528, -73.93426],
-    [40.85428, -73.92289],
-    [40.8681, -73.91012],
-    [40.87348, -73.9105],
-    [40.87949, -73.93056],
-    [40.73901, -74.0221],
-    [40.70193, -74.02398],
+type Region = 'manhattan';
+
+const REGIONS: Map<Region, Polyline> = new Map<Region, Polyline>([
+  [
+    'manhattan',
+    [
+      [40.6988, -74.01355],
+      [40.71161, -73.97322],
+      [40.75516, -73.96023],
+      [40.77962, -73.9376],
+      [40.78787, -73.93593],
+      [40.7974, -73.92768],
+      [40.80455, -73.92994],
+      [40.80977, -73.93323],
+      [40.83528, -73.93426],
+      [40.85428, -73.92289],
+      [40.8681, -73.91012],
+      [40.87348, -73.9105],
+      [40.87949, -73.93056],
+      [40.73901, -74.0221],
+      [40.70193, -74.02398],
+    ],
   ],
-};
+]);
+
+const REGIONS_EPSG2263: Map<Region, Polyline> = makeEPSG2263Regions();
+
+function makeEPSG2263Regions(): Map<Region, Polyline> {
+  let regions: [Region, Polyline][] = [];
+
+  for (const [region, polyline] of REGIONS.entries()) {
+    regions.push([region, polyline.map(latLngToEPSG2263)]);
+  }
+
+  return new Map(regions);
+}
 
 // Define EPSG:2263 projection for precise coordinate transformation
 proj4.defs(
@@ -65,23 +87,28 @@ proj4.defs(
   '+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 +y_0=0 +datum=NAD83 +units=us-ft +no_defs'
 );
 
-const REGIONS_EPSG2263 = {};
-for (const [name, coords] of Object.entries(REGIONS)) {
-  REGIONS_EPSG2263[name] = coords.map(([lat, lng]) =>
-    latLngToEPSG2263(lat, lng)
-  );
-}
-
 // Convert lat/lng to EPSG:2263 with maximum precision
-function latLngToEPSG2263(lat, lng) {
+function latLngToEPSG2263(latlng: Vec2): Vec2 {
   // Use proj4js for precise coordinate transformation
+  const [lat, lng] = latlng;
   const transformed = proj4('EPSG:4326', 'EPSG:2263', [lng, lat]);
 
   return [transformed[0], transformed[1]];
 }
 
+interface Envelope {
+  minX: number;
+  minY: number;
+  minZ?: number;
+  maxX: number;
+  maxY: number;
+  maxZ?: number;
+}
+
 // Extract boundedBy envelope from GML file (streaming version)
-async function extractBoundedByEnvelopeStreaming(inputFile) {
+async function extractBoundedByEnvelopeStreaming(
+  inputFile: string
+): Promise<Envelope | null> {
   return new Promise((resolve) => {
     // Read only the first 1MB to find the boundedBy section
     const fileStream = fs.createReadStream(inputFile, {
@@ -109,7 +136,7 @@ async function extractBoundedByEnvelopeStreaming(inputFile) {
 }
 
 // Extract boundedBy envelope from GML file (legacy version for small files)
-function extractBoundedByEnvelope(gmlText) {
+function extractBoundedByEnvelope(gmlText: string): Envelope | null {
   const boundedByMatch = gmlText.match(
     /<gml:boundedBy>[\s\S]*?<gml:Envelope[^>]*>[\s\S]*?<gml:lowerCorner>([^<]+)<\/gml:lowerCorner>[\s\S]*?<gml:upperCorner>([^<]+)<\/gml:upperCorner>[\s\S]*?<\/gml:Envelope>[\s\S]*?<\/gml:boundedBy>/
   );
@@ -127,13 +154,12 @@ function extractBoundedByEnvelope(gmlText) {
 }
 
 // Check if envelope is entirely outside our bounding filter
-function isEnvelopeOutsideFilter(envelope, regionArg, customPolygonEPSG2263) {
+function isEnvelopeOutsidePolygon(
+  envelope: Envelope | null,
+  boundary: Polyline
+) {
   if (!envelope) return false; // If no envelope, we can't skip the file
-  if (!regionArg && !customPolygonEPSG2263) return false; // No filtering
 
-  const boundary = regionArg
-    ? REGIONS_EPSG2263[regionArg]
-    : customPolygonEPSG2263;
   const polygonBounds = {
     minX: Math.min(...boundary.map((p) => p[0])),
     maxX: Math.max(...boundary.map((p) => p[0])),
@@ -148,46 +174,13 @@ function isEnvelopeOutsideFilter(envelope, regionArg, customPolygonEPSG2263) {
   );
 }
 
-// Parse polygon string from command line argument
-function parsePolygonString(polyString) {
-  try {
-    // Remove quotes and split by commas
-    const cleanString = polyString.replace(/['"]/g, '');
-    const coordPairs = cleanString.split('),(');
-
-    const polygon = [];
-    for (const pair of coordPairs) {
-      // Remove parentheses and split by comma
-      const cleanPair = pair.replace(/[()]/g, '');
-      const [lat, lng] = cleanPair.split(',').map(Number);
-
-      if (isNaN(lat) || isNaN(lng)) {
-        throw new Error(`Invalid coordinate: ${pair}`);
-      }
-
-      polygon.push([lat, lng]);
-    }
-
-    return polygon;
-  } catch (error) {
-    throw new Error(`Failed to parse polygon: ${error.message}`);
-  }
-}
-
-// Point-in-polygon check for Manhattan
-function isInRegion(coords, region) {
-  return coords.some((coord) =>
-    pointInPolygon(coord, REGIONS_EPSG2263[region])
-  );
-}
-
 // Point-in-polygon check for custom polygon
-function isInCustomPolygon(coords, polygonEPSG2263) {
-  return coords.some((coord) => pointInPolygon(coord, polygonEPSG2263));
+function isInPolygon(points: Point[], polygon: Polyline) {
+  return points.some((point) => pointInPolygon(point, polygon));
 }
 
 // Point-in-polygon test using ray casting algorithm with floating point tolerance
-function pointInPolygon(point, polygon) {
+function pointInPolygon(point: Point, polygon: Polyline) {
   const [x, y] = [point[0], point[1]];
   let inside = false;
 
@@ -228,23 +221,27 @@ function pointInPolygon(point, polygon) {
 }
 
 // Generate output directory name based on parameters
-function generateOutputDirName(percent, regionFilter, customPolygon) {
-  const prefix = customPolygon ? 'poly' : regionFilter ? 'manhattan' : 'nyc';
+function generateOutputDirName(
+  percent: number,
+  region: Region | undefined,
+  customPolygon: Polyline | undefined
+) {
+  const prefix = customPolygon ? 'poly' : region ? region : 'nyc';
   const percentStr = percent === 100 ? 'all' : percent.toString();
   return `${prefix}-${percentStr}-${Date.now()}`;
 }
 
 // Extract coordinates from GML posList or pos elements
-function extractCoordinates(gmlText) {
+function extractionPositionPoints(gmlText: string): Vec3[] {
   const posListMatch = gmlText.match(
     /<gml:posList[^>]*>([^<]+)<\/gml:posList>/
   );
   if (posListMatch) {
     const coords = posListMatch[1].trim().split(/\s+/).map(Number);
-    const points = [];
+    const points: Vec3[] = [];
     // GML coordinates are X/Y/Z triplets
     for (let i = 0; i < coords.length; i += 3) {
-      points.push([coords[i], coords[i + 1]], coords[i + 2]); // X, Y, Z
+      points.push([coords[i], coords[i + 1], coords[i + 2]]); // X, Y, Z
     }
     return points;
   }
@@ -261,17 +258,25 @@ function extractCoordinates(gmlText) {
     });
   }
 
-  return null;
+  return [];
+}
+
+interface FilterResult {
+  file?: string;
+  buildingCount: number;
+  filteredCount: number;
+  originalSize: number;
+  chunkCount: number;
 }
 
 async function createSampleFromFile(
-  inputFile,
-  outputFile,
-  percent = 1,
-  regionFilter = false,
-  customPolygonEPSG2263 = null,
-  chunkSize = null
-) {
+  inputFile: string,
+  outputFile: string,
+  percent: number,
+  chunkSize?: number,
+  region?: Region,
+  polygon?: Polyline
+): Promise<FilterResult> {
   console.log(`Processing: ${path.basename(inputFile)}`);
 
   try {
@@ -281,23 +286,28 @@ async function createSampleFromFile(
     console.log(`📁 File size: ${fileSizeMB} MB`);
 
     // Early boundedBy check for spatial filtering
-    if (regionFilter || customPolygonEPSG2263) {
+    if (region || polygon) {
       const envelope = await extractBoundedByEnvelopeStreaming(inputFile);
+      const boundary: Polyline = region
+        ? REGIONS_EPSG2263.get(region)!
+        : polygon!;
 
       if (envelope) {
         console.log(
           `🗺️  File envelope: X[${envelope.minX.toFixed(0)}-${envelope.maxX.toFixed(0)}], Y[${envelope.minY.toFixed(0)}-${envelope.maxY.toFixed(0)}]`
         );
 
-        if (
-          isEnvelopeOutsideFilter(envelope, regionFilter, customPolygonEPSG2263)
-        ) {
+        if (isEnvelopeOutsidePolygon(envelope, boundary)) {
           console.log(
             `⏭️  File envelope entirely outside filter bounds - skipping file`
           );
           // Create empty output file
-          fs.writeFileSync(outputFile, '');
-          return { buildingCount: 0, selectedCount: 0 };
+          return {
+            buildingCount: 0,
+            filteredCount: 0,
+            chunkCount: 0,
+            originalSize: stats.size,
+          };
         }
       } else {
         console.log(`⚠️  No boundedBy envelope found - processing entire file`);
@@ -314,39 +324,32 @@ async function createSampleFromFile(
     let buffer = '';
     let lineCount = 0;
 
-    let buildingLines = [];
-    let currentBuilding = [];
+    let buildingLines: string[] = [];
+    let currentBuilding: string[] = [];
     let inBuilding = false;
     let buildingDepth = 0;
     let buildingCount = 0;
     let headerComplete = false;
     let currentBuildingInBoundary = false;
-    let buildingCoordinates = null;
+    let buildingPoints: Point[] = [];
     let skipBuildingLines = false;
 
-    function indentLine(line) {
+    function indentLine(line: string): string {
       return '  '.repeat(buildingDepth) + line;
     }
 
-    // single file stream
-    let outputStream = null;
-    let tmpOutputStream = null;
+    // let tmpOutputStream: fs.WriteStream
 
     // chunk stream
-    let currentChunkStream = null;
-    let tmpChunkStream = null;
+    let currentChunkStream: fs.WriteStream | undefined = undefined;
+    // let tmpChunkStream: fs.WriteStream;
     let chunkCount = 0;
     let buildingsInCurrentChunk = 0;
-    let baseFileName = null;
+    let baseFileName: string;
 
-    if (chunkSize) {
-      // Chunking mode - we'll create multiple files
-      baseFileName = path.basename(inputFile, '.gml');
-      console.log(`📄 Chunking mode: ${chunkSize} buildings per file`);
-    } else {
-      // Single file mode
-      outputStream = fs.createWriteStream(outputFile);
-    }
+    // Chunking mode - we'll create multiple files
+    baseFileName = path.basename(inputFile, '.gml');
+    console.log(`📄 Chunking mode: ${chunkSize} buildings per file`);
 
     // Generate random indices for sampling (p out of every 100)
     const p = Math.max(1, Math.floor(percent));
@@ -372,7 +375,7 @@ async function createSampleFromFile(
     }
 
     // Custom line processing function
-    const processLine = (line) => {
+    const processLine = (line: string): void => {
       lineCount++;
 
       // Write header lines directly to output file
@@ -395,7 +398,7 @@ async function createSampleFromFile(
         currentBuilding = ['  <cityObjectMember>', line]; // Start with cityObjectMember tag
         buildingCount++;
         currentBuildingInBoundary = false;
-        buildingCoordinates = null;
+        buildingPoints = [];
         skipBuildingLines = false;
 
         // Create new chunk file if needed; reset chunk streams and envelope
@@ -407,14 +410,16 @@ async function createSampleFromFile(
             chunkFileName
           );
 
-          const tmpChunkFileName = `${chunkFileName}.tmp`;
+          // const tmpChunkFileName = `${chunkFileName}.tmp`;
+          /*
           const tmpChunkFilePath = path.join(
             path.dirname(outputFile),
             tmpChunkFileName
           );
+          */
 
           currentChunkStream = fs.createWriteStream(chunkFilePath);
-          tmpChunkStream = fs.createWriteStream(tmpChunkFilePath);
+          // tmpChunkStream = fs.createWriteStream(tmpChunkFilePath);
 
           // Write header to new chunk file, then wait for buildings.
           currentChunkStream.write(CITYGML_HEADER + '\n');
@@ -447,7 +452,7 @@ async function createSampleFromFile(
               currentBuilding = [];
               inBuilding = false;
               currentBuildingInBoundary = false;
-              buildingCoordinates = null;
+              buildingPoints = [];
               skipBuildingLines = false;
             }
           }
@@ -456,23 +461,18 @@ async function createSampleFromFile(
 
         // Extract coordinates for filtering (only if we haven't found any yet)
         if (
-          (regionArg || customPolygonEPSG2263) &&
-          !buildingCoordinates &&
+          (region || polygon) &&
+          buildingPoints.length == 0 &&
           (line.includes('<gml:posList') || line.includes('<gml:pos'))
         ) {
-          console.log('====== TSX: EXTRACTION ======');
-          buildingCoordinates = extractCoordinates(line);
-          if (buildingCoordinates && buildingCoordinates.length > 0) {
+          buildingPoints = extractionPositionPoints(line);
+          if (buildingPoints.length > 0) {
             // Check if any point of the building is in the target area
             let inTargetArea = false;
-            if (customPolygonEPSG2263) {
-              inTargetArea = isInCustomPolygon(
-                buildingCoordinates,
-                customPolygonEPSG2263
-              );
-            } else {
-              inTargetArea = isInRegion(buildingCoordinates, regionArg);
-            }
+            let boundary: Polyline = region
+              ? REGIONS_EPSG2263.get(region)!
+              : polygon!;
+            inTargetArea = isInPolygon(buildingPoints, boundary);
             currentBuildingInBoundary = inTargetArea;
 
             // Early skip: if building is outside target area and we have coordinates, skip the rest
@@ -496,10 +496,7 @@ async function createSampleFromFile(
             // Building complete
             // check the sample
             // Only include building if it's in the target area (when filtering is enabled)
-            if (
-              !(regionArg || customPolygonEPSG2263) ||
-              currentBuildingInBoundary
-            ) {
+            if (!(region || polygon) || currentBuildingInBoundary) {
               currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
 
               // Check if this building should be selected based on random sampling
@@ -508,15 +505,15 @@ async function createSampleFromFile(
                 if (chunkSize) {
                   // Write building to current chunk
                   currentBuilding.forEach((buildingLine) => {
-                    currentChunkStream.write(buildingLine + '\n');
+                    currentChunkStream!.write(buildingLine + '\n');
                   });
                   buildingsInCurrentChunk++;
 
                   // Check if we need to start a new chunk
                   if (buildingsInCurrentChunk >= chunkSize) {
                     // Close current chunk
-                    currentChunkStream.write(CITYGML_FOOTER + '\n');
-                    currentChunkStream.end();
+                    currentChunkStream!.write(CITYGML_FOOTER + '\n');
+                    currentChunkStream!.end();
 
                     console.log(
                       `✅ Completed chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`
@@ -524,7 +521,7 @@ async function createSampleFromFile(
 
                     // Reset for next chunk
                     buildingsInCurrentChunk = 0;
-                    currentChunkStream = null;
+                    currentChunkStream = undefined;
                   }
                 } else {
                   // Single file mode
@@ -536,7 +533,7 @@ async function createSampleFromFile(
             currentBuilding = [];
             inBuilding = false;
             currentBuildingInBoundary = false;
-            buildingCoordinates = null;
+            buildingPoints = [];
             skipBuildingLines = false;
           }
         }
@@ -568,7 +565,8 @@ async function createSampleFromFile(
 
           try {
             processLine(line);
-          } catch (error) {
+          } catch (e) {
+            let error = e as Error;
             console.error(`Error processing line ${lineCount}:`, error.message);
             reject(error);
             return;
@@ -581,7 +579,8 @@ async function createSampleFromFile(
         if (buffer.trim()) {
           try {
             processLine(buffer.trim());
-          } catch (error) {
+          } catch (e) {
+            let error = e as Error;
             console.error(`Error processing final line:`, error.message);
             reject(error);
             return;
@@ -594,94 +593,52 @@ async function createSampleFromFile(
         process.stdout.write(
           `Found ${buildingCount.toLocaleString()} buildings\n`
         );
-        if (chunkSize) {
-          // Close the last chunk if it has content
-          if (currentChunkStream && buildingsInCurrentChunk > 0) {
-            currentChunkStream.write(CITYGML_FOOTER + '\n');
-            currentChunkStream.end();
-            console.log(
-              `✅ Completed final chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`
-            );
-          }
 
-          const totalSelectedBuildings = buildingLines.filter((line) =>
-            line.includes('<bldg:Building gml:id=')
-          ).length;
+        // Close the last chunk if it has content
+        if (currentChunkStream && buildingsInCurrentChunk > 0) {
+          currentChunkStream.write(CITYGML_FOOTER + '\n');
+          currentChunkStream.end();
           console.log(
-            `Selected ${totalSelectedBuildings} buildings for sample (${chunkCount} chunks)`
+            `✅ Completed final chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`
           );
+        }
 
-          // Wait for the stream to finish writing
-          if (currentChunkStream) {
-            currentChunkStream.on('finish', () => {
-              console.log(
-                `✅ Created ${chunkCount} chunk files in: ${path.dirname(outputFile)}`
-              );
+        const totalSelectedBuildings = buildingLines.filter((line) =>
+          line.includes('<bldg:Building gml:id=')
+        ).length;
+        console.log(
+          `Selected ${totalSelectedBuildings} buildings for sample (${chunkCount} chunks)`
+        );
 
-              // In chunking mode, we don't have a single output file to stat
-              // Just show the original size and chunk count
-              const originalSize = stats.size;
-              console.log(
-                `📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → ${chunkCount} chunk files created`
-              );
+        // Wait for the stream to finish writing
+        if (currentChunkStream) {
+          currentChunkStream.on('finish', () => {
+            console.log(
+              `✅ Created ${chunkCount} chunk files in: ${path.dirname(outputFile)}`
+            );
 
-              resolve({
-                originalBuildings: buildingCount,
-                sampleBuildings: totalSelectedBuildings,
-                originalSize,
-                sampleSize: 0, // We don't track total sample size in chunking mode
-                chunkCount: chunkCount,
-              });
-            });
-          } else {
+            // In chunking mode, we don't have a single output file to stat
+            // Just show the original size and chunk count
+            const originalSize = stats.size;
+            console.log(
+              `📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → ${chunkCount} chunk files created`
+            );
+
             resolve({
-              originalBuildings: buildingCount,
-              sampleBuildings: buildingLines.filter((line) =>
-                line.includes('<bldg:Building gml:id=')
-              ).length,
-              originalSize: stats.size,
-              sampleSize: 0,
+              buildingCount: buildingCount,
+              filteredCount: totalSelectedBuildings,
+              originalSize,
               chunkCount: chunkCount,
             });
-          }
-        } else {
-          // Single file mode
-          console.log(
-            `Selected ${buildingLines.filter((line) => line.includes('<bldg:Building gml:id=')).length} buildings for sample`
-          );
-
-          // Write the building lines to the output file
-          buildingLines.forEach((line) => {
-            outputStream.write(line + '\n');
           });
-
-          // Close the XML
-          outputStream.write('</CityModel>\n');
-          outputStream.end();
-
-          // Wait for the stream to finish writing
-          outputStream.on('finish', () => {
-            // Show file sizes for comparison
-            const originalSize = stats.size;
-            const sampleSize_bytes = fs.statSync(outputFile).size;
-            const sizeReduction = (
-              ((originalSize - sampleSize_bytes) / originalSize) *
-              100
-            ).toFixed(1);
-
-            console.log(`✅ Sample created: ${path.basename(outputFile)}`);
-            console.log(
-              `📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → Sample: ${(sampleSize_bytes / 1024 / 1024).toFixed(1)} MB (${sizeReduction}% reduction)`
-            );
-
-            resolve({
-              originalBuildings: buildingCount,
-              sampleBuildings: buildingLines.filter((line) =>
-                line.includes('<bldg:Building gml:id=')
-              ).length,
-              originalSize,
-              sampleSize: sampleSize_bytes,
-            });
+        } else {
+          resolve({
+            buildingCount: buildingCount,
+            filteredCount: buildingLines.filter((line) =>
+              line.includes('<bldg:Building gml:id=')
+            ).length,
+            originalSize: stats.size,
+            chunkCount: chunkCount,
           });
         }
       });
@@ -690,7 +647,8 @@ async function createSampleFromFile(
         reject(error);
       });
     });
-  } catch (error) {
+  } catch (e) {
+    let error = e as Error;
     console.error(
       `❌ Error processing ${path.basename(inputFile)}:`,
       error.message
@@ -700,14 +658,14 @@ async function createSampleFromFile(
 }
 
 async function processAllFiles(
-  percent = 1,
-  skipOnError = false,
-  regionArg = null,
-  customPolygonEPSG2263 = null,
-  outputDirName = null,
-  specificDANumbers = null,
-  chunkSize = null
-) {
+  percent: number,
+  skipOnError: boolean,
+  region: Region | undefined,
+  polygon: Polyline | undefined,
+  outputDirName: string,
+  specificDANumbers: number[] | undefined,
+  chunkSize: number
+): Promise<void> {
   const completeDir = 'data/complete';
   const sampleDir = outputDirName ? `data/${outputDirName}` : 'data/sample';
 
@@ -740,14 +698,14 @@ async function processAllFiles(
     gmlFiles.forEach((file) => console.log(`  - ${file}`));
   }
 
-  const results = [];
+  const results: FilterResult[] = [];
   let totalOriginalBuildings = 0;
   let totalSampleBuildings = 0;
   let totalOriginalSize = 0;
   let totalSampleSize = 0;
   let processedCount = 0;
   let failedCount = 0;
-  let statusEmojis = [];
+  let statusEmojis: string[] = [];
 
   // Process each file
   for (let i = 0; i < gmlFiles.length; i++) {
@@ -767,34 +725,33 @@ async function processAllFiles(
         inputFile,
         outputFile,
         percent,
-        regionArg,
-        customPolygonEPSG2263,
-        chunkSize
+        chunkSize,
+        region,
+        polygon
       );
 
       // Check if we have any buildings in the sample
-      if (result.sampleBuildings > 0) {
+      if (result.filteredCount > 0) {
         results.push({
           file: gmlFile,
           ...result,
         });
 
-        totalOriginalBuildings += result.originalBuildings;
-        totalSampleBuildings += result.sampleBuildings;
+        totalOriginalBuildings += result.buildingCount;
+        totalSampleBuildings += result.filteredCount;
         totalOriginalSize += result.originalSize;
-        totalSampleSize += result.sampleSize;
         processedCount++;
         statusEmojis.push('✅');
 
         console.log(
-          `✅ Successfully processed ${gmlFile} (${result.sampleBuildings} buildings)`
+          `✅ Successfully processed ${gmlFile} (${result.filteredCount} buildings)`
         );
       } else {
         processedCount++;
         statusEmojis.push('0️⃣');
 
         console.log(
-          `0️⃣ Processed ${gmlFile} (no buildings in ${customPolygonEPSG2263 ? 'given polygon' : { regionArg }})`
+          `0️⃣ Processed ${gmlFile} (no buildings in ${polygon ? 'given polygon' : { regionArg }})`
         );
 
         // Remove the output file if it's empty
@@ -802,7 +759,9 @@ async function processAllFiles(
           fs.unlinkSync(outputFile);
         }
       }
-    } catch (error) {
+    } catch (e) {
+      const error = e as Error;
+
       console.error(`❌ Failed to process ${gmlFile}:`, error.message);
       failedCount++;
       statusEmojis.push('❌');
@@ -861,12 +820,20 @@ async function processAllFiles(
     console.log('\n📁 Sample files created in: data/sample/');
     results.forEach((result) => {
       console.log(
-        `  - ${result.file.replace('.gml', '_Sample.gml')} (${result.sampleBuildings} buildings)`
+        `  - ${result.file!.replace('.gml', '_Sample.gml')} (${result.filteredCount} buildings)`
       );
     });
   }
 
-  return { processedCount, failedCount, totalFiles: gmlFiles.length };
+  if (processedCount === gmlFiles.length) {
+    console.log('\n✅ All files processed successfully!');
+  } else if (failedCount > 0) {
+    console.log(`\n⚠️  Processing completed with ${failedCount} failures.`);
+  } else {
+    console.log('\n✅ All files processed successfully!');
+  }
+
+  return;
 }
 
 // Get command line arguments
@@ -947,35 +914,153 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
-// Argument parsing function
-function getArg(name, aliases = [], defaultValue = undefined) {
-  const allNames = [name, ...aliases];
-  for (const argName of allNames) {
-    const arg = args.find(
-      (s) => s === `--${argName}` || s.startsWith(`--${argName}=`)
-    );
-    if (arg) {
-      if (arg.includes('=')) return arg.split('=')[1];
-      // Find the next argument as the value
-      const index = args.indexOf(arg);
-      if (index < args.length - 1 && !args[index + 1].startsWith('-')) {
-        return args[index + 1];
-      }
-      return true;
-    }
-  }
-  return defaultValue;
+function argNameToFlag(argName: string): string {
+  return (argName.length == 1 ? '-' : '--') + argName;
 }
 
+// Argument parsing function
+function getArg(name: string, aliases: string[] = []) {
+  const allNames = [name, ...aliases];
+  let flags = allNames.map(argNameToFlag);
+
+  const arg = args.find((s) =>
+    flags.some((flag) => s === flag || s.startsWith(flag + '='))
+  );
+  if (arg) {
+    if (arg.includes('=')) return arg.split('=')[1];
+    // Find the next argument as the value
+    const index = args.indexOf(arg);
+    if (index < args.length - 1 && !args[index + 1].startsWith('-')) {
+      return args[index + 1];
+    }
+    // if next arg isn't a value, we have a "true" flag
+    return true;
+  }
+  return undefined;
+}
+
+interface ArgOpts<T> {
+  required?: boolean;
+  default?: T | undefined;
+}
+
+// Parse polygon string from command line argument
+function parsePolygonString(polyString: string): Polyline {
+  try {
+    // Remove quotes and split by commas
+    const cleanString = polyString.replace(/['"]/g, '');
+    const coordPairs = cleanString.split('),(');
+
+    const polygon: Polyline = [];
+    for (const pair of coordPairs) {
+      // Remove parentheses and split by comma
+      const cleanPair = pair.replace(/[()]/g, '');
+      const [lat, lng] = cleanPair.split(',').map(Number);
+
+      if (isNaN(lat) || isNaN(lng)) {
+        throw new Error(`Invalid coordinate: ${pair}`);
+      }
+
+      polygon.push([lat, lng]);
+    }
+
+    return polygon;
+  } catch (e) {
+    const error = e as Error;
+    throw new Error(`Failed to parse polygon: ${error.message}`);
+  }
+}
+
+function makeArgGetter<T>(
+  parse: (stringValue: string, argName: string) => T,
+  defaultValue?: T
+) {
+  return function (
+    name: string,
+    aliases: string[] = [],
+    opts?: ArgOpts<T>
+  ): T | undefined {
+    // value is...
+    // true        if just the flag
+    // a string    if the flag is followed by a value
+    // undefined   if the arg is not supplied
+    let argValue = getArg(name, aliases);
+    let flagsString = [name, ...aliases].map(argNameToFlag).join('/');
+
+    if (typeof argValue === 'string') {
+      return parse(argValue, name);
+    } else if (argValue === true) {
+      // hack to allow boolean flags
+      if (typeof defaultValue === 'boolean') {
+        return parse('true', name);
+      } else {
+        throw new Error(`Using ${flagsString} requires passing a value`);
+      }
+    } else if (argValue === undefined) {
+      if (opts?.default !== undefined) {
+        return opts?.default;
+      } else if (opts?.required) {
+        throw new Error(`${flagsString} is required`);
+      } else {
+        return undefined;
+      }
+    }
+  };
+}
+
+function parseRange(arg: string, argName: string): number[] {
+  let numbers: Set<number> = new Set<number>();
+  let ranges = arg.split(',');
+
+  for (const rangeStr of ranges) {
+    let num = Number(rangeStr);
+    let rangeMatch = rangeStr.match(/(?<lower>\d+)-(?<upper>\d+)/);
+
+    if (!isNaN(num)) {
+      numbers.add(num);
+      continue;
+    } else if (rangeMatch) {
+      const lower = Number(rangeMatch[1]);
+      const upper = Number(rangeMatch[2]);
+      if (lower <= upper) {
+        for (let i = lower; i <= upper; i++) {
+          numbers.add(i);
+        }
+        continue;
+      }
+    }
+
+    // could not parse, or lower > upper
+    throw new Error(
+      `${argNameToFlag(argName)} takes a comma-separated range  (e.g. "1,2,5-7")`
+    );
+  }
+
+  if (!numbers.size) {
+    throw new Error(
+      `${argNameToFlag(argName)} takes a comma-separated range  (e.g. "1,2,5-7")`
+    );
+  }
+
+  return Array.from(numbers);
+}
+
+const getStringArg = makeArgGetter<string>(String);
+const getRangeArg = makeArgGetter<number[]>(parseRange);
+const getNumberArg = makeArgGetter<number>(Number);
+const getPolylineArg = makeArgGetter<Polyline>(parsePolygonString);
+const getBoolArg = makeArgGetter<boolean>(() => true, false);
+
 // Parse arguments
-const indexArg = getArg('idx', ['index', 'i']);
-const percentArg = getArg('pct', ['percent', 'p'], '1');
-const processAll = !indexArg; // Process all by default unless specific indices provided
-const skipOnError = args.includes('--skip-on-error');
-const regionArg = getArg('region', ['r']);
-const polygonArg = getArg('polygon');
-const outputDirArg = getArg('out', ['o']);
-const chunkSizeArg = getArg('chunk-size', ['c', 'chunk']); // number of buildings per file
+const indexArg = getRangeArg('idx', ['index', 'i']);
+const percent = getNumberArg('pct', ['percent', 'p'], { default: 1 });
+const skipOnError = getBoolArg('skip-on-error', [], {
+  default: false,
+}) as boolean;
+const regionArg = getStringArg('region', ['r']);
+const polygonArg = getPolylineArg('polygon');
+let outputDirName = getStringArg('out', ['o']);
+const chunkSize = getNumberArg('chunk-size', ['c', 'chunk'], { default: 3000 }); // number of buildings per file
 
 // Validate polygon and regionArg filter mutual exclusivity
 if (regionArg && polygonArg) {
@@ -985,68 +1070,48 @@ if (regionArg && polygonArg) {
   process.exit(1);
 }
 
-if (regionArg && !REGIONS[regionArg.toLowerCase()]) {
+if (regionArg && !(regionArg in REGIONS)) {
   console.error(
     `❌ Error: Invalid region name: ${regionArg}. Valid options are: ${Object.keys(REGIONS).join(', ')}`
   );
   process.exit(1);
 }
 
+let region = regionArg as Region | undefined;
+
 // Parse and validate polygon if provided
-let customPolygonEPSG2263 = null;
+let polygon = undefined;
 if (polygonArg) {
   try {
-    const customPolygon = parsePolygonString(polygonArg);
-    customPolygonEPSG2263 = customPolygon.map(([lat, lng]) =>
-      latLngToEPSG2263(lat, lng)
-    );
-    console.log(
-      `🗺️  Custom polygon loaded with ${customPolygon.length} points`
-    );
-  } catch (error) {
-    console.error(`❌ Error parsing polygon: ${error.message}`);
+    polygon = polygonArg.map(latLngToEPSG2263);
+    console.log(`🗺️  Custom polygon loaded with ${polygonArg.length} points`);
+  } catch (e) {
+    console.error(`❌ Error parsing polygon: ${(e as Error).message}`);
     process.exit(1);
   }
 }
 
 // Parse percentage
-const percent = parseInt(percentArg);
-if (isNaN(percent) || percent < 1 || percent > 100) {
+if (!percent || percent < 1 || percent > 100) {
   console.error('❌ Error: Percentage must be a number between 1 and 100');
   process.exit(1);
 }
 
 // Parse chunk size
-let chunkSize = null;
-if (chunkSizeArg) {
-  chunkSize = parseInt(chunkSizeArg);
-  if (isNaN(chunkSize) || chunkSize < 0) {
-    console.error('❌ Error: Chunk size must be a nonnegative number');
-    process.exit(1);
-  }
+if (chunkSize == undefined || chunkSize < 0) {
+  console.error('❌ Error: Chunk size must be a nonnegative number');
+  process.exit(1);
 }
 
 // Parse DA numbers
-let daNumbers = [];
-if (indexArg) {
-  daNumbers = indexArg.split(',').map((num) => {
-    const parsed = parseInt(num.trim());
-    if (isNaN(parsed)) {
-      console.error(`❌ Error: Invalid DA number: ${num}`);
-      process.exit(1);
-    }
-    return parsed;
-  });
-}
+let daNumbers = indexArg;
 
 // Generate output directory name
-const outputDirName =
-  outputDirArg ||
-  generateOutputDirName(percent, regionArg, customPolygonEPSG2263);
+outputDirName ||= generateOutputDirName(percent, region, polygon);
 
-const filesToProcess = processAll
-  ? 'all DA files'
-  : `DA files: ${daNumbers.join(', ')}`;
+const filesToProcess = daNumbers
+  ? `DA files: ${daNumbers.join(', ')}`
+  : 'all DA files';
 
 console.log(`🚀 Processing ${filesToProcess} with ${percent}% sampling...`);
 if (skipOnError) {
@@ -1054,10 +1119,10 @@ if (skipOnError) {
     `⚠️  --skip-on-error flag enabled: will continue processing on errors`
   );
 }
-if (regionArg) {
-  console.log(`🗽 --region flag enabled: filtering to ${regionArg} only`);
+if (region) {
+  console.log(`🗽 --region flag enabled: filtering to ${region} only`);
 }
-if (customPolygonEPSG2263) {
+if (polygon) {
   console.log(`🗺️  Custom polygon filter enabled`);
 }
 if (chunkSize) {
@@ -1068,24 +1133,12 @@ console.log(`📁 Output directory: data/${outputDirName}`);
 processAllFiles(
   percent,
   skipOnError,
-  regionArg,
-  customPolygonEPSG2263,
+  region,
+  polygon,
   outputDirName,
-  processAll ? null : daNumbers,
+  daNumbers,
   chunkSize
-)
-  .then((result) => {
-    if (result.processedCount === result.totalFiles) {
-      console.log('\n✅ All files processed successfully!');
-    } else if (result.failedCount > 0) {
-      console.log(
-        `\n⚠️  Processing completed with ${result.failedCount} failures.`
-      );
-    } else {
-      console.log('\n✅ All files processed successfully!');
-    }
-  })
-  .catch((error) => {
-    console.error('\n❌ Error during batch processing:', error.message);
-    process.exit(1);
-  });
+).catch((error) => {
+  console.error('\n❌ Error during batch processing:', error.message);
+  process.exit(1);
+});
