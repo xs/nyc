@@ -372,7 +372,7 @@ function extractPolygons(node: GMLNode): Poly3D[] {
   return polys;
 }
 
-function extractLod0Footprint(node: GMLNode) {
+function extractLod0Footprint(node: GMLNode): Ring3D | null {
   for (const sub of walk(node)) {
     for (const k of Object.keys(sub)) {
       if (nsLocal(k) !== 'lod0FootPrint') continue;
@@ -402,7 +402,7 @@ interface Building {
   mesh?: Mesh;
 }
 
-interface BuildingElements {
+interface BuildingElement {
   node: GMLNode;
   polys: Poly3D[];
 }
@@ -414,7 +414,7 @@ function processGMLSync(filePath: string, opts: { lod2: boolean }): Building[] {
 
   // Use a simpler approach: track the current building ID as we walk through the XML
   const buildings = [];
-  const buildingGroups = new Map<string, BuildingElements[]>(); // building ID -> array of geometric elements
+  const buildingGroups = new Map<string, BuildingElement[]>(); // building ID -> array of geometric elements
   let currentBuildingId = null;
 
   for (const node of walk(root)) {

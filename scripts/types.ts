@@ -12,7 +12,7 @@ export interface Point {
 }
 
 // Region types
-export type Region = 'manhattan' | 'downtown';
+export type Region = 'manhattan' | 'downtown' | 'north-brooklyn' | 'fidi';
 
 // Envelope type for bounding boxes
 export interface Envelope {

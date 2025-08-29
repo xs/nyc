@@ -101,6 +101,15 @@ const REGIONS: Map<Region, Polyline> = new Map<Region, Polyline>([
       [40.73543, -73.9667],
     ],
   ],
+  [
+    'fidi',
+    [
+      [40.6958, -74.01992],
+      [40.70519, -73.99583],
+      [40.71409, -74.00622],
+      [40.71997, -74.01887],
+    ],
+  ],
 ]);
 
 const REGIONS_EPSG2263: Map<Region, Polyline> = makeEPSG2263Regions();
