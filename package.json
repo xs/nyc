@@ -8,6 +8,8 @@
     "watch": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --watch",
     "extract": "npx run scripts/extract.js",
     "sample": "tsx scripts/sample.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky"
@@ -19,13 +21,15 @@
     "proj4": "^2.19.10"
   },
   "devDependencies": {
+    "@types/earcut": "^3.0.0",
     "@types/node": "^24.3.0",
     "esbuild": "^0.25.9",
     "husky": "^9.1.7",
     "lint-staged": "^16.1.5",
     "prettier": "^3.6.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.8"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,json,md}": [

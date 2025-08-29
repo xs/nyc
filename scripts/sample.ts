@@ -2,6 +2,22 @@ import readline from 'readline';
 import fs from 'fs';
 import path from 'path';
 import proj4 from 'proj4';
+import {
+  getStringArg,
+  getRangeArg,
+  getNumberArg,
+  getBoolArg,
+  makeArgGetter,
+  ArgsError,
+} from './argparse.js';
+import {
+  type Vec2,
+  type Vec3,
+  type Polyline,
+  type Region,
+  type Envelope,
+  type FilterResult,
+} from './types.js';
 
 // XML namespaces for CityGML
 const CITYGML_NAMESPACES = {
@@ -37,16 +53,10 @@ const CITYGML_HEADER: string = `<?xml version="1.0" encoding="UTF-8"?>
 
 const CITYGML_FOOTER = '</CityModel>';
 
-type Vec2 = [number, number];
-type Vec3 = [number, number, number];
-type Point = Vec2 | Vec3;
-type Polyline = Vec2[];
-
 // Named region polygon coordinates (lat, lng)
 // Based on actual building coordinate ranges in EPSG:2263
 // Buildings are in range: X: 995000-1000000, Y: 198000-200000
 // Let's create a polygon that covers this range with some buffer
-type Region = 'manhattan' | 'downtown';
 
 const REGIONS: Map<Region, Polyline> = new Map<Region, Polyline>([
   [
@@ -116,15 +126,6 @@ function latLngToEPSG2263(latlng: Vec2): Vec2 {
   const transformed = proj4('EPSG:4326', 'EPSG:2263', [lng, lat]);
 
   return [transformed[0], transformed[1]];
-}
-
-interface Envelope {
-  minX: number;
-  minY: number;
-  minZ?: number;
-  maxX: number;
-  maxY: number;
-  maxZ?: number;
 }
 
 // Extract boundedBy envelope from GML file (streaming version)
@@ -197,12 +198,12 @@ function isEnvelopeOutsidePolygon(
 }
 
 // Point-in-polygon check for custom polygon
-function isInPolygon(points: Point[], polygon: Polyline) {
+function isInPolygon(points: Vec3[], polygon: Polyline) {
   return points.some((point) => pointInPolygon(point, polygon));
 }
 
 // Point-in-polygon test using ray casting algorithm with floating point tolerance
-function pointInPolygon(point: Point, polygon: Polyline) {
+function pointInPolygon(point: Vec3, polygon: Polyline) {
   const [x, y] = [point[0], point[1]];
   let inside = false;
 
@@ -283,15 +284,6 @@ function extractionPositionPoints(gmlText: string): Vec3[] {
   return [];
 }
 
-interface FilterResult {
-  file?: string;
-  buildingCount: number;
-  filteredCount: number;
-  originalSize: number;
-  filteredSize: number;
-  chunkCount: number;
-}
-
 async function filterFile(
   inputFile: string,
   outputDir: string,
@@ -356,7 +348,7 @@ async function filterFile(
     let filteredSize = 0;
     let headerComplete = false;
     let currentBuildingInBoundary = false;
-    let buildingPoints: Point[] = [];
+    let buildingPoints: Vec3[] = [];
     let skipBuildingLines = false;
 
     function indentLine(line: string): string {
@@ -762,7 +754,7 @@ async function processAllFiles(
         statusEmojis.push('🟨');
 
         console.log(
-          `❎ Processed ${gmlFile} (no buildings in ${polygon ? 'given polygon' : regionArg})`
+          `❎ Processed ${gmlFile} (no buildings in ${polygon ? 'given polygon' : region})`
         );
       }
     } catch (e) {
@@ -867,10 +859,8 @@ async function processAllFiles(
   return;
 }
 
-// Get command line arguments
-const args = process.argv.slice(2);
-
 // Check for help flag
+const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
   console.log('NYC 3D Buildings Sample Generator (Streaming)');
   console.log('============================================');
@@ -945,44 +935,6 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
-function argNameToFlag(argName: string): string {
-  return (argName.length == 1 ? '-' : '--') + argName;
-}
-
-// Argument parsing function
-function getArg(name: string, aliases: string[] = []) {
-  const allNames = [name, ...aliases];
-  let flags = allNames.map(argNameToFlag);
-
-  const arg = args.find((s) =>
-    flags.some((flag) => s === flag || s.startsWith(flag + '='))
-  );
-  if (arg) {
-    if (arg.includes('=')) return arg.split('=')[1];
-    // Find the next argument as the value
-    const index = args.indexOf(arg);
-    if (index < args.length - 1 && !args[index + 1].startsWith('-')) {
-      return args[index + 1];
-    }
-    // if next arg isn't a value, we have a "true" flag
-    return true;
-  }
-  return undefined;
-}
-
-interface ArgOpts<T> {
-  required?: boolean;
-  default?: T | undefined;
-}
-
-// Custom error type for argument parsing errors
-class ArgsError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ArgsError';
-  }
-}
-
 // Parse polygon string from command line argument
 function parsePolygonString(polyString: string): Polyline {
   try {
@@ -1008,87 +960,8 @@ function parsePolygonString(polyString: string): Polyline {
   }
 }
 
-function makeArgGetter<T>(
-  parse: (stringValue: string, argName: string) => T,
-  defaultValue?: T
-) {
-  return function (
-    name: string,
-    aliases: string[] = [],
-    opts?: ArgOpts<T>
-  ): T | undefined {
-    try {
-      let argValue = getArg(name, aliases);
-      let flagsString = [name, ...aliases].map(argNameToFlag).join('/');
-
-      if (typeof argValue === 'string') {
-        return parse(argValue, name);
-      } else if (argValue === true) {
-        if (typeof defaultValue === 'boolean') {
-          return parse('true', name);
-        } else {
-          throw new ArgsError(`Using ${flagsString} requires passing a value`);
-        }
-      } else if (argValue === undefined) {
-        if (opts?.default !== undefined) {
-          return opts?.default;
-        } else if (opts?.required) {
-          throw new ArgsError(`${flagsString} is required`);
-        } else {
-          return undefined;
-        }
-      }
-    } catch (e) {
-      if (e instanceof ArgsError) {
-        console.error(`❌ ${e.message}`);
-        process.exit(1);
-      }
-      throw e;
-    }
-  };
-}
-
-function parseRange(arg: string, argName: string): number[] {
-  let numbers: Set<number> = new Set<number>();
-  let ranges = arg.split(',');
-
-  for (const rangeStr of ranges) {
-    let num = Number(rangeStr);
-    let rangeMatch = rangeStr.match(/(?<lower>\d+)-(?<upper>\d+)/);
-
-    if (!isNaN(num)) {
-      numbers.add(num);
-      continue;
-    } else if (rangeMatch) {
-      const lower = Number(rangeMatch[1]);
-      const upper = Number(rangeMatch[2]);
-      if (lower <= upper) {
-        for (let i = lower; i <= upper; i++) {
-          numbers.add(i);
-        }
-        continue;
-      }
-    }
-
-    throw new ArgsError(
-      `${argNameToFlag(argName)} takes a comma-separated range (e.g. "1,2,5-7")`
-    );
-  }
-
-  if (!numbers.size) {
-    throw new ArgsError(
-      `${argNameToFlag(argName)} takes a comma-separated range (e.g. "1,2,5-7")`
-    );
-  }
-
-  return Array.from(numbers);
-}
-
-const getStringArg = makeArgGetter<string>(String);
-const getRangeArg = makeArgGetter<number[]>(parseRange);
-const getNumberArg = makeArgGetter<number>(Number);
+// Create sample-specific argument getters
 const getPolylineArg = makeArgGetter<Polyline>(parsePolygonString);
-const getBoolArg = makeArgGetter<boolean>(() => true, false);
 
 // Parse arguments
 const indexArg = getRangeArg('idx', ['index', 'i']);
@@ -1099,9 +972,10 @@ const skipOnError = getBoolArg('skip-on-error', [], {
 const regionArg = getStringArg('region', ['r']);
 const polygonArg = getPolylineArg('polygon');
 let outputDirName = getStringArg('out', ['o']);
-const chunkSize = getNumberArg('chunk-size', ['c', 'chunk'], { default: 3000 }); // number of buildings per file
+const chunkSize =
+  getNumberArg('chunk-size', ['c', 'chunk'], { default: 3000 }) ?? 3000;
 
-// Validate polygon and regionArg filter mutual exclusivity
+// Validate polygon and region filter mutual exclusivity
 if (regionArg && polygonArg) {
   console.error(
     '❌ Error: Cannot use both --region and --polygon. Use one or the other.'
@@ -1109,6 +983,7 @@ if (regionArg && polygonArg) {
   process.exit(1);
 }
 
+// Validate region name
 if (regionArg && !(new Set(REGIONS.keys()) as Set<string>).has(regionArg)) {
   console.error(
     `❌ Error: Invalid region name: ${regionArg}. Valid options are: ${Array.from(REGIONS.keys()).join(', ')}`
@@ -1119,7 +994,7 @@ if (regionArg && !(new Set(REGIONS.keys()) as Set<string>).has(regionArg)) {
 let region: Region | undefined = regionArg as Region | undefined;
 
 // Parse and validate polygon if provided
-let polygon = undefined;
+let polygon: Polyline | undefined = undefined;
 if (polygonArg) {
   try {
     polygon = polygonArg.map(latLngToEPSG2263);
@@ -1130,14 +1005,14 @@ if (polygonArg) {
   }
 }
 
-// Parse percentage
+// Validate percentage
 if (!percent || percent < 1 || percent > 100) {
   console.error('❌ Error: Percentage must be a number between 1 and 100');
   process.exit(1);
 }
 
-// Parse chunk size
-if (chunkSize == undefined || chunkSize < 0) {
+// Validate chunk size
+if (chunkSize < 0) {
   console.error('❌ Error: Chunk size must be a nonnegative number');
   process.exit(1);
 }
