@@ -33,3 +33,49 @@ export interface FilterResult {
   filteredSize: number;
   chunkCount: number;
 }
+
+interface ACCESSOR_VEC3 {
+  bufferView: number;
+  componentType: number;
+  count: number;
+  type: 'VEC3';
+  max: Vec3;
+  min: Vec3;
+}
+
+interface ACCESSOR_SCALAR {
+  bufferView: number;
+  componentType: number;
+  count: number;
+  type: 'SCALAR';
+}
+
+export interface GLTF {
+  asset: {
+    version: string;
+  };
+  scene: number;
+  scenes: {
+    nodes: number[];
+  }[];
+  nodes: {
+    mesh: number;
+    translation: Vec3;
+  }[];
+  meshes: {
+    primitives: {
+      attributes: { POSITION: number };
+      indices: number;
+    }[];
+  }[];
+  accessors: (ACCESSOR_VEC3 | ACCESSOR_SCALAR)[];
+  bufferViews: {
+    buffer: number;
+    byteOffset: number;
+    byteLength: number;
+  }[];
+  buffers: {
+    uri?: string;
+    byteLength: number;
+  }[];
+}

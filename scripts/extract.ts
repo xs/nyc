@@ -6,8 +6,8 @@ import proj4, { Converter } from 'proj4';
 import { XMLParser } from 'fast-xml-parser';
 import earcut from 'earcut';
 import Flatbush from 'flatbush';
-import { getBoolArg, getStringArg } from './argparse';
-import { Point, Vec2, Vec3 } from './types';
+import { getBoolArg, getStringListArg, getStringArg } from './argparse';
+import { GLTF, Point, Vec2, Vec3 } from './types';
 // Remove glTF-transform imports and try manual GLB creation
 
 // No polyfills needed for manual GLB creation
@@ -68,6 +68,10 @@ const OUT_DIR = getStringArg('out', ['o'], {
   default: './out/downtown-boogie',
 }) as string;
 const LOD2 = getBoolArg('lod2', [], { default: false }) as boolean;
+const DEBUG = getBoolArg('debug', ['d'], { default: false }) as boolean;
+const FORMATS = getStringListArg('format', ['f'], {
+  default: ['glb'],
+}) as glFormat[];
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -631,262 +635,255 @@ function writeFlatbushIndex(
   fs.writeFileSync(outJSON, JSON.stringify(buildings.map((b) => b.id)));
 }
 
-function writeGLB(buildings: Building[], outGlb: string): void {
-  console.log(
-    `Writing GLB with ${buildings.filter((b) => b.mesh).length} meshes`
-  );
-  console.log(`Output path: ${outGlb}`);
+type glFormat = 'gltf' | 'glb';
+interface gltfAsset {
+  gltf: GLTF;
+  binary: Buffer;
+}
 
-  try {
-    const buildingsWithMeshes = buildings.filter((b) => b.mesh);
-    if (buildingsWithMeshes.length === 0) {
-      console.log('No buildings with meshes found');
-      return;
+function makeGL(buildings: Building[]): gltfAsset | null {
+  const buildingsWithMeshes = buildings.filter((b) => b.mesh);
+  if (buildingsWithMeshes.length === 0) {
+    console.log('No buildings with meshes found');
+    return null;
+  }
+
+  console.log(`Creating GLTF with ${buildingsWithMeshes.length} buildings`);
+
+  // Calculate building centers and centered positions for proper positioning
+  const buildingCenters: Point[] = [];
+  const centeredPositions = [];
+
+  for (const building of buildingsWithMeshes) {
+    const positions = building.mesh!.positions;
+    let centerX = 0,
+      centerY = 0,
+      centerZ = 0;
+
+    for (let i = 0; i < positions.length; i += 3) {
+      centerX += positions[i];
+      centerY += positions[i + 1];
+      centerZ += positions[i + 2];
     }
 
-    console.log(`Creating GLB with ${buildingsWithMeshes.length} buildings`);
-
-    // Calculate building centers and centered positions for proper positioning
-    const buildingCenters: Point[] = [];
-    const centeredPositions = [];
-
-    for (const building of buildingsWithMeshes) {
-      const positions = building.mesh!.positions;
-      let centerX = 0,
-        centerY = 0,
-        centerZ = 0;
-
-      for (let i = 0; i < positions.length; i += 3) {
-        centerX += positions[i];
-        centerY += positions[i + 1];
-        centerZ += positions[i + 2];
-      }
-
-      const vertexCount = positions.length / 3;
-      const center = {
-        x: centerX / vertexCount,
-        y: centerY / vertexCount,
-        z: centerZ / vertexCount,
-      };
-
-      buildingCenters.push(center);
-
-      // Center the geometry around origin for proper node positioning
-      const centered = new Float32Array(positions.length);
-      for (let j = 0; j < positions.length; j += 3) {
-        centered[j] = positions[j] - center.x;
-        centered[j + 1] = positions[j + 1] - center.y;
-        centered[j + 2] = positions[j + 2] - center.z;
-      }
-      centeredPositions.push(centered);
-    }
-
-    interface ACCESSOR_VEC3 {
-      bufferView: number;
-      componentType: number;
-      count: number;
-      type: 'VEC3';
-      max: Vec3;
-      min: Vec3;
-    }
-
-    interface ACCESSOR_SCALAR {
-      bufferView: number;
-      componentType: number;
-      count: number;
-      type: 'SCALAR';
-    }
-
-    interface GLTF {
-      asset: {
-        version: string;
-      };
-      scene: number;
-      scenes: {
-        nodes: number[];
-      }[];
-      nodes: {
-        mesh: number;
-        translation: Vec3;
-      }[];
-      meshes: {
-        primitives: {
-          attributes: { POSITION: number };
-          indices: number;
-        }[];
-      }[];
-      accessors: (ACCESSOR_VEC3 | ACCESSOR_SCALAR)[];
-      bufferViews: {
-        buffer: number;
-        byteOffset: number;
-        byteLength: number;
-      }[];
-      buffers: {
-        byteLength: number;
-      }[];
-    }
-
-    // Create GLB structure for all buildings with proper transformations
-    const gltf: GLTF = {
-      asset: { version: '2.0' },
-      scene: 0,
-      scenes: [{ nodes: buildingsWithMeshes.map((_, i) => i) }],
-      nodes: buildingsWithMeshes.map((_, i) => {
-        const center = buildingCenters[i];
-        return {
-          mesh: i,
-          translation: [center.x, center.y, center.z],
-        };
-      }),
-      meshes: buildingsWithMeshes.map(() => ({
-        primitives: [
-          {
-            attributes: { POSITION: 0 },
-            indices: 1,
-          },
-        ],
-      })),
-      accessors: [],
-      bufferViews: [],
-      buffers: [
-        {
-          byteLength: 0, // Will be calculated
-        },
-      ],
+    const vertexCount = positions.length / 3;
+    const center = {
+      x: centerX / vertexCount,
+      y: centerY / vertexCount,
+      z: centerZ / vertexCount,
     };
 
-    // Calculate total buffer size and create accessors/bufferViews
-    let byteOffset = 0;
-    let accessorIndex = 0;
-    let bufferViewIndex = 0;
+    buildingCenters.push(center);
 
-    for (let i = 0; i < buildingsWithMeshes.length; i++) {
-      const building = buildingsWithMeshes[i];
-      const centered = centeredPositions[i];
-      const positionsLength = centered.length * 4;
-      const indicesLength = building.mesh!.indices.length * 4;
-
-      // Update mesh to use correct accessor indices
-      gltf.meshes[accessorIndex].primitives[0].attributes.POSITION =
-        accessorIndex * 2;
-      gltf.meshes[accessorIndex].primitives[0].indices = accessorIndex * 2 + 1;
-
-      // Create position accessor with centered bounds
-      gltf.accessors.push({
-        bufferView: bufferViewIndex,
-        componentType: 5126, // FLOAT
-        count: centered.length / 3,
-        type: 'VEC3',
-        max: [
-          Math.max(...centered.filter((_, i) => i % 3 === 0)),
-          Math.max(...centered.filter((_, i) => i % 3 === 1)),
-          Math.max(...centered.filter((_, i) => i % 3 === 2)),
-        ],
-        min: [
-          Math.min(...centered.filter((_, i) => i % 3 === 0)),
-          Math.min(...centered.filter((_, i) => i % 3 === 1)),
-          Math.min(...centered.filter((_, i) => i % 3 === 2)),
-        ],
-      });
-
-      // Create position bufferView
-      gltf.bufferViews.push({
-        buffer: 0,
-        byteOffset: byteOffset,
-        byteLength: positionsLength,
-      });
-
-      byteOffset += positionsLength;
-      bufferViewIndex++;
-
-      // Create indices accessor
-      gltf.accessors.push({
-        bufferView: bufferViewIndex,
-        componentType: 5125, // UNSIGNED_INT
-        count: building.mesh!.indices.length,
-        type: 'SCALAR',
-      });
-
-      // Create indices bufferView
-      gltf.bufferViews.push({
-        buffer: 0,
-        byteOffset: byteOffset,
-        byteLength: indicesLength,
-      });
-
-      byteOffset += indicesLength;
-      bufferViewIndex++;
-      accessorIndex++;
+    // Center the geometry around origin for proper node positioning
+    const centered = new Float32Array(positions.length);
+    for (let j = 0; j < positions.length; j += 3) {
+      centered[j] = positions[j] - center.x;
+      centered[j + 1] = positions[j + 1] - center.y;
+      centered[j + 2] = positions[j + 2] - center.z;
     }
-
-    // Update buffer byteLength
-    gltf.buffers[0].byteLength = byteOffset;
-
-    // Convert to JSON
-    const jsonString = JSON.stringify(gltf);
-    const jsonBuffer = Buffer.from(jsonString, 'utf8');
-
-    // Pad JSON to 4-byte boundary
-    const jsonPadding = (4 - (jsonBuffer.length % 4)) % 4;
-    const paddedJsonBuffer = Buffer.concat([
-      jsonBuffer,
-      Buffer.alloc(jsonPadding),
-    ]);
-
-    // Create binary data for all buildings with centered geometry
-    const binaryBuffers = [];
-    for (let i = 0; i < buildingsWithMeshes.length; i++) {
-      const building = buildingsWithMeshes[i];
-      const centered = centeredPositions[i];
-
-      binaryBuffers.push(Buffer.from(centered.buffer));
-      binaryBuffers.push(Buffer.from(building.mesh!.indices.buffer));
-    }
-    const binaryBuffer = Buffer.concat(binaryBuffers);
-
-    // Pad binary to 4-byte boundary
-    const binaryPadding = (4 - (binaryBuffer.length % 4)) % 4;
-    const paddedBinaryBuffer = Buffer.concat([
-      binaryBuffer,
-      Buffer.alloc(binaryPadding),
-    ]);
-
-    // Create GLB header (12 bytes)
-    const header = Buffer.alloc(12);
-    header.writeUInt32LE(0x46546c67, 0); // "glTF"
-    header.writeUInt32LE(2, 4); // version
-    header.writeUInt32LE(
-      12 + paddedJsonBuffer.length + paddedBinaryBuffer.length,
-      8
-    ); // total length
-
-    // Create JSON chunk header (8 bytes)
-    const jsonChunkHeader = Buffer.alloc(8);
-    jsonChunkHeader.writeUInt32LE(paddedJsonBuffer.length, 0);
-    jsonChunkHeader.writeUInt32LE(0x4e4f534a, 4); // "JSON"
-
-    // Create binary chunk header (8 bytes)
-    const binaryChunkHeader = Buffer.alloc(8);
-    binaryChunkHeader.writeUInt32LE(paddedBinaryBuffer.length, 0);
-    binaryChunkHeader.writeUInt32LE(0x004e4942, 4); // "BIN"
-
-    // Combine all parts
-    const glbBuffer = Buffer.concat([
-      header,
-      jsonChunkHeader,
-      paddedJsonBuffer,
-      binaryChunkHeader,
-      paddedBinaryBuffer,
-    ]);
-
-    fs.writeFileSync(outGlb, glbBuffer);
-    console.log('GLB write completed successfully');
-    console.log(`GLB file size: ${glbBuffer.length} bytes`);
-  } catch (e) {
-    const error = e as Error;
-    console.log(`GLB write error details: ${error.stack}`);
-    throw error;
+    centeredPositions.push(centered);
   }
+
+  // Create GLTF structure for all buildings with proper transformations
+  const gltf: GLTF = {
+    asset: { version: '2.0' },
+    scene: 0,
+    scenes: [{ nodes: buildingsWithMeshes.map((_, i) => i) }],
+    nodes: buildingsWithMeshes.map((_, i) => {
+      const center = buildingCenters[i];
+      return {
+        mesh: i,
+        translation: [center.x, center.y, center.z],
+      };
+    }),
+    meshes: buildingsWithMeshes.map(() => ({
+      primitives: [
+        {
+          attributes: { POSITION: 0 },
+          indices: 1,
+        },
+      ],
+    })),
+    accessors: [],
+    bufferViews: [],
+    buffers: [
+      {
+        byteLength: 0, // Will be calculated
+      },
+    ],
+  };
+
+  // Calculate total buffer size and create accessors/bufferViews
+  let byteOffset = 0;
+  let accessorIndex = 0;
+  let bufferViewIndex = 0;
+
+  for (let i = 0; i < buildingsWithMeshes.length; i++) {
+    const building = buildingsWithMeshes[i];
+    const centered = centeredPositions[i];
+    const positionsLength = centered.length * 4;
+    const indicesLength = building.mesh!.indices.length * 4;
+
+    // Update mesh to use correct accessor indices
+    gltf.meshes[accessorIndex].primitives[0].attributes.POSITION =
+      accessorIndex * 2;
+    gltf.meshes[accessorIndex].primitives[0].indices = accessorIndex * 2 + 1;
+
+    // Create position accessor with centered bounds
+    gltf.accessors.push({
+      bufferView: bufferViewIndex,
+      componentType: 5126, // FLOAT
+      count: centered.length / 3,
+      type: 'VEC3',
+      max: [
+        Math.max(...centered.filter((_, i) => i % 3 === 0)),
+        Math.max(...centered.filter((_, i) => i % 3 === 1)),
+        Math.max(...centered.filter((_, i) => i % 3 === 2)),
+      ],
+      min: [
+        Math.min(...centered.filter((_, i) => i % 3 === 0)),
+        Math.min(...centered.filter((_, i) => i % 3 === 1)),
+        Math.min(...centered.filter((_, i) => i % 3 === 2)),
+      ],
+    });
+
+    // Create position bufferView
+    gltf.bufferViews.push({
+      buffer: 0,
+      byteOffset: byteOffset,
+      byteLength: positionsLength,
+    });
+
+    byteOffset += positionsLength;
+    bufferViewIndex++;
+
+    // Create indices accessor
+    gltf.accessors.push({
+      bufferView: bufferViewIndex,
+      componentType: 5125, // UNSIGNED_INT
+      count: building.mesh!.indices.length,
+      type: 'SCALAR',
+    });
+
+    // Create indices bufferView
+    gltf.bufferViews.push({
+      buffer: 0,
+      byteOffset: byteOffset,
+      byteLength: indicesLength,
+    });
+
+    byteOffset += indicesLength;
+    bufferViewIndex++;
+    accessorIndex++;
+  }
+
+  // Update buffer byteLength
+  gltf.buffers[0].byteLength = byteOffset;
+
+  const binaryBuffers = [];
+  for (let i = 0; i < buildingsWithMeshes.length; i++) {
+    const building = buildingsWithMeshes[i];
+    const centered = centeredPositions[i];
+
+    binaryBuffers.push(Buffer.from(centered.buffer));
+    binaryBuffers.push(Buffer.from(building.mesh!.indices.buffer));
+  }
+  const binary = Buffer.concat(binaryBuffers);
+
+  return { gltf, binary };
+}
+
+// writes GL files for given formats; returns a list of file paths created
+function writeGL(
+  buildings: Building[],
+  formats: Iterable<glFormat>
+): string[] | null {
+  const gltfAsset = makeGL(buildings);
+
+  if (gltfAsset == null) {
+    const filenames = Array.from(formats).map((f) => `buildings.${f}`);
+    console.log(` to write ${filenames.join(', ')}; no buildings found`);
+    return null;
+  }
+
+  const { gltf, binary } = gltfAsset;
+
+  let outPaths = [];
+
+  for (let format of formats) {
+    switch (format) {
+      case 'gltf':
+        let outGltf = structuredClone(gltf);
+        const gltfPath = path.join(OUT_DIR, 'buildings.gltf');
+        outGltf.buffers[0].uri = 'buildings.bin';
+
+        // write .gtlf file
+        fs.writeFileSync(
+          gltfPath,
+          DEBUG ? JSON.stringify(outGltf, null, 2) : JSON.stringify(outGltf)
+        );
+        outPaths.push(gltfPath);
+
+        // Write binary file
+        const binPath = gltfPath.replace('.gltf', '.bin');
+        fs.writeFileSync(binPath, binary);
+        outPaths.push(binPath);
+        break;
+
+      case 'glb':
+        const glbPath = path.join(OUT_DIR, 'buildings.glb');
+        const jsonString = JSON.stringify(gltf);
+        const jsonBuffer = Buffer.from(jsonString, 'utf8');
+
+        // Pad JSON to 4-byte boundary
+        const jsonPadding = (4 - (jsonBuffer.length % 4)) % 4;
+        const paddedJsonBuffer = Buffer.concat([
+          jsonBuffer,
+          Buffer.alloc(jsonPadding),
+        ]);
+
+        // Create binary data for all buildings with centered geometry
+        // Pad binary to 4-byte boundary
+        const binaryPadding = (4 - (binary.length % 4)) % 4;
+        const paddedBinaryBuffer = Buffer.concat([
+          binary,
+          Buffer.alloc(binaryPadding),
+        ]);
+
+        // Create GLB header (12 bytes)
+        const header = Buffer.alloc(12);
+        header.writeUInt32LE(0x46546c67, 0); // "glTF"
+        header.writeUInt32LE(2, 4); // version
+        header.writeUInt32LE(
+          12 + paddedJsonBuffer.length + paddedBinaryBuffer.length,
+          8
+        ); // total length
+
+        // Create JSON chunk header (8 bytes)
+        const jsonChunkHeader = Buffer.alloc(8);
+        jsonChunkHeader.writeUInt32LE(paddedJsonBuffer.length, 0);
+        jsonChunkHeader.writeUInt32LE(0x4e4f534a, 4); // "JSON"
+
+        // Create binary chunk header (8 bytes)
+        const binaryChunkHeader = Buffer.alloc(8);
+        binaryChunkHeader.writeUInt32LE(paddedBinaryBuffer.length, 0);
+        binaryChunkHeader.writeUInt32LE(0x004e4942, 4); // "BIN"
+
+        // Combine all parts
+        const glbBuffer = Buffer.concat([
+          header,
+          jsonChunkHeader,
+          paddedJsonBuffer,
+          binaryChunkHeader,
+          paddedBinaryBuffer,
+        ]);
+
+        fs.writeFileSync(glbPath, glbBuffer);
+        outPaths.push(glbPath);
+    }
+  }
+  return outPaths;
 }
 
 /* =========================
@@ -918,32 +915,35 @@ function writeGLB(buildings: Building[], outGlb: string): void {
     files = files.map((f) => path.join(IN_DIR, f));
   }
 
-  const all = [];
+  const allBuildings = [];
   for (const p of files) {
     const f = path.basename(p);
     console.log(`Parsing ${f} …`);
     const bs: Building[] = processGMLSync(p, { lod2: LOD2 });
     console.log(`  +${bs.length} buildings`);
-    all.push(...bs);
+    allBuildings.push(...bs);
   }
-  console.log(`Total buildings: ${all.length}`);
+  console.log(`Total buildings: ${allBuildings.length}`);
 
   const fpPath = path.join(OUT_DIR, 'footprints.geojson');
-  writeFootprintsGeoJSON(all, fpPath);
+  writeFootprintsGeoJSON(allBuildings, fpPath);
   console.log(`Wrote ${fpPath}`);
 
   const outBin = path.join(OUT_DIR, 'index.bin');
   const outJSON = path.join(OUT_DIR, 'ids.json');
-  writeFlatbushIndex(all, outBin, outJSON);
+  writeFlatbushIndex(allBuildings, outBin, outJSON);
   console.log(`Wrote ${outBin}, ${outJSON}`);
 
   try {
-    const glbPath = path.join(OUT_DIR, 'buildings.glb');
-    writeGLB(all, glbPath);
-    console.log(`Wrote ${glbPath}`);
+    const outPaths = writeGL(allBuildings, FORMATS);
+    if (outPaths) {
+      for (const path of outPaths) {
+        console.log(`Wrote ${path}`);
+      }
+    }
   } catch (e) {
     const error = e as Error;
-    console.log(`GLB generation failed: ${error.message}`);
+    console.log(`Failed to generate ${FORMATS.join(',')}: ${error.message}`);
     console.log('Continuing without 3D model...');
   }
 

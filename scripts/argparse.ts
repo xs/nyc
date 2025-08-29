@@ -13,6 +13,7 @@ export class ArgsError extends Error {
 export interface ArgOpts<T> {
   required?: boolean;
   default?: T | undefined;
+  validate?: (value: T) => void; // validates the parsed value
 }
 
 // Get command line arguments (excluding script name and node executable)
@@ -23,6 +24,15 @@ function getArgs(): string[] {
 // Convert argument name to flag format
 export function argNameToFlag(argName: string): string {
   return (argName.length == 1 ? '-' : '--') + argName;
+}
+
+// Convert arg and alises to human-readable flag string
+export function makeFlagString(argName: string, aliases?: string[]): string {
+  let flagString = argNameToFlag(argName);
+  if (aliases && aliases.length > 0) {
+    flagString += ` (aliases: ${aliases.map(argNameToFlag).join(', ')})`;
+  }
+  return flagString;
 }
 
 // Core argument parsing function
@@ -48,15 +58,22 @@ export function getArg(name: string, aliases: string[] = []) {
 }
 
 // Parse range arguments (e.g., "1,2,3" or "1-3")
-export function parseRange(arg: string, argName: string): number[] {
+export function parseRange(
+  arg: string,
+  argConfig: ArgConfig<number[]>
+): number[] {
+  const { name, aliases } = argConfig;
+  const flagString = makeFlagString(name, aliases);
+  const parseRangeError = new ArgsError(
+    `${flagString} takes a comma-separated range (e.g. "1,2,5-7")`
+  );
+
   let numbers: Set<number> = new Set<number>();
   let ranges = arg.trim().split(',');
 
   // Handle empty or whitespace-only input
   if (ranges.length === 0 || (ranges.length === 1 && ranges[0].trim() === '')) {
-    throw new ArgsError(
-      `${argNameToFlag(argName)} takes a comma-separated range (e.g. "1,2,5-7")`
-    );
+    throw parseRangeError;
   }
 
   for (const rangeStr of ranges) {
@@ -80,24 +97,33 @@ export function parseRange(arg: string, argName: string): number[] {
       }
     }
 
-    throw new ArgsError(
-      `${argNameToFlag(argName)} takes a comma-separated range (e.g. "1,2,5-7")`
-    );
+    throw parseRangeError;
   }
 
   if (!numbers.size) {
-    throw new ArgsError(
-      `${argNameToFlag(argName)} takes a comma-separated range (e.g. "1,2,5-7")`
-    );
+    throw parseRangeError;
   }
 
   return Array.from(numbers);
 }
 
 // Generic argument getter factory
+
+interface GetterOpts<T> {
+  default: T;
+}
+
+interface ArgConfig<T> {
+  name: string;
+  aliases?: string[];
+  opts?: ArgOpts<T>;
+}
+
 export function makeArgGetter<T>(
-  parse: (stringValue: string, argName: string) => T,
-  defaultValue?: T
+  parse:
+    | ((argString: string, argConfig: ArgConfig<T>) => T)
+    | ((argString: string) => T),
+  getterOpts?: GetterOpts<T>
 ) {
   return function (
     name: string,
@@ -106,23 +132,30 @@ export function makeArgGetter<T>(
   ): T | undefined {
     try {
       let argValue = getArg(name, aliases);
-      let flagsString = [name, ...aliases].map(argNameToFlag).join('/');
+      let value: T | undefined;
+      const flagString = makeFlagString(name, aliases);
 
       if (typeof argValue === 'string') {
-        return parse(argValue, name);
+        value = parse(argValue, { name, aliases });
+        if (opts?.validate) {
+          opts.validate(value);
+        }
+        return value;
       } else if (argValue === true) {
-        if (typeof defaultValue === 'boolean') {
-          return parse('true', name);
+        if (typeof getterOpts?.default === 'boolean') {
+          return parse('true', { name });
         } else {
-          throw new ArgsError(`Using ${flagsString} requires passing a value`);
+          throw new ArgsError(
+            `Using ${flagString} requires passing a second argument`
+          );
         }
       } else if (argValue === undefined) {
         if (opts?.default !== undefined) {
           return opts?.default;
         } else if (opts?.required) {
-          throw new ArgsError(`${flagsString} is required`);
+          throw new ArgsError(`${flagString} is required`);
         } else {
-          return defaultValue;
+          return getterOpts?.default;
         }
       }
     } catch (e) {
@@ -135,8 +168,30 @@ export function makeArgGetter<T>(
   };
 }
 
+export function parseList(
+  arg: string,
+  argConfig: ArgConfig<string[]>
+): string[] {
+  const { name, aliases } = argConfig;
+  const flagString = makeFlagString(name, aliases);
+  const parts = arg
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length);
+  if (parts.length == 0) {
+    throw new ArgsError(`${flagString} found no valid strings in ${arg}`);
+  }
+
+  return parts;
+}
+
 // Common argument getter functions
 export const getStringArg = makeArgGetter<string>(String);
 export const getRangeArg = makeArgGetter<number[]>(parseRange);
+export const getStringListArg = makeArgGetter<string[]>((input: string) =>
+  input.split(',')
+);
 export const getNumberArg = makeArgGetter<number>(Number);
-export const getBoolArg = makeArgGetter<boolean>(() => true, false);
+export const getBoolArg = makeArgGetter<boolean>(() => true, {
+  default: false,
+});

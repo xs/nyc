@@ -9,6 +9,8 @@ import {
   getNumberArg,
   getBoolArg,
   ArgsError,
+  parseList,
+  makeFlagString,
 } from '../argparse.js';
 
 describe('argparse.ts functionality', () => {
@@ -22,6 +24,38 @@ describe('argparse.ts functionality', () => {
   afterEach(() => {
     // Restore original process.argv
     process.argv = [...originalArgv];
+  });
+
+  describe('makeFlagString', () => {
+    it('make single character flag strings', () => {
+      expect(makeFlagString('a')).toBe('-a');
+    });
+
+    it('make multiple character flag strings', () => {
+      expect(makeFlagString('all')).toBe('--all');
+      expect(makeFlagString('none')).toBe('--none');
+    });
+
+    it('make aliases', () => {
+      let name: string;
+      let aliases: string[];
+      let expected: string;
+
+      name = 'all';
+      aliases = ['a'];
+      expected = '--all (aliases: -a)';
+      expect(makeFlagString(name, aliases)).toBe(expected);
+
+      name = 'v';
+      aliases = ['verbose'];
+      expected = '-v (aliases: --verbose)';
+      expect(makeFlagString(name, aliases)).toBe(expected);
+
+      name = 'yes';
+      aliases = ['y', 'ya', 'yeah', 'yuh'];
+      expected = '--yes (aliases: -y, --ya, --yeah, --yuh)';
+      expect(makeFlagString(name, aliases)).toBe(expected);
+    });
   });
 
   describe('argNameToFlag', () => {
@@ -70,41 +104,74 @@ describe('argparse.ts functionality', () => {
 
   describe('parseRange', () => {
     it('should parse simple numbers', () => {
-      expect(parseRange('1,2,3', 'test')).toEqual([1, 2, 3]);
+      expect(parseRange('1,2,3', { name: 'test' })).toEqual([1, 2, 3]);
     });
 
     it('should parse ranges', () => {
-      expect(parseRange('1-3', 'test')).toEqual([1, 2, 3]);
+      expect(parseRange('1-3', { name: 'test' })).toEqual([1, 2, 3]);
     });
 
     it('should parse mixed ranges and numbers', () => {
-      expect(parseRange('1,3-5,7', 'test')).toEqual([1, 3, 4, 5, 7]);
+      expect(parseRange('1,3-5,7', { name: 'test' })).toEqual([1, 3, 4, 5, 7]);
     });
 
     it('should remove duplicates', () => {
-      expect(parseRange('1,1,2', 'test')).toEqual([1, 2]);
+      expect(parseRange('1,1,2', { name: 'test' })).toEqual([1, 2]);
     });
 
     it('should throw error for invalid range', () => {
-      expect(() => parseRange('invalid', 'test')).toThrow(ArgsError);
+      expect(() => parseRange('invalid', { name: 'test' })).toThrow(ArgsError);
     });
 
     it('should throw error for empty input', () => {
-      expect(() => parseRange('', 'test')).toThrow(ArgsError);
-      expect(() => parseRange('   ', 'test')).toThrow(ArgsError);
+      expect(() => parseRange('', { name: 'test' })).toThrow(ArgsError);
+      expect(() => parseRange('   ', { name: 'test' })).toThrow(ArgsError);
+    });
+  });
+
+  describe('parseList', () => {
+    it('should parse lists', () => {
+      let input = '1,2,3';
+      let expected = ['1', '2', '3'];
+      expect(parseList(input, { name: 'test' })).toEqual(expected);
+    });
+
+    it('should parse lists of size 1', () => {
+      expect(parseList('apple', { name: 'test' })).toEqual(['apple']);
+    });
+
+    it('should trim parts', () => {
+      let input = 'lots  ,  of  ,  space';
+      let expected = ['lots', 'of', 'space'];
+      expect(parseList(input, { name: 'test' })).toEqual(expected);
+    });
+
+    it('should remove empty strings', () => {
+      let input = ',,a,b,,,,,c';
+      let expected = ['a', 'b', 'c'];
+      expect(parseList(input, { name: 'test' })).toEqual(expected);
+    });
+
+    it('should throw error for empty lists', () => {
+      let input = ',,,,,,';
+      expect(() => parseList(input, { name: 'test' })).toThrow(ArgsError);
+    });
+
+    it('should throw error for empty input', () => {
+      expect(() => parseList('   ', { name: 'test' })).toThrow(ArgsError);
     });
   });
 
   describe('makeArgGetter', () => {
     it('should create getter with default value', () => {
-      const getTestArg = makeArgGetter<string>(String, 'default');
+      const getTestArg = makeArgGetter<string>(String, { default: 'default' });
 
       process.argv = ['node', 'script.js'];
       expect(getTestArg('test')).toBe('default');
     });
 
     it('should create getter with default value', () => {
-      const getTestArg = makeArgGetter<string>(String, 'default');
+      const getTestArg = makeArgGetter<string>(String, { default: 'default' });
 
       process.argv = ['node', 'script.js'];
       expect(getTestArg('test')).toBe('default');
