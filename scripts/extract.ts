@@ -463,6 +463,7 @@ function processGMLSync(filePath: string, opts: { lod2: boolean }): Building[] {
 
   // Process each building group and deduplicate by footprint
   const footprintToBuilding = new Map<string, Building>(); // footprint key -> building
+  let duplicateBuildings = 0;
 
   for (const [buildingId, elements] of buildingGroups) {
     // Calculate overall height from all elements
@@ -538,9 +539,7 @@ function processGMLSync(filePath: string, opts: { lod2: boolean }): Building[] {
 
     // Check if we already have a building with this footprint
     if (footprintToBuilding.has(footprintKey)) {
-      console.log(
-        `Skipping duplicate building ${buildingId} (same footprint as ${footprintToBuilding.get(footprintKey)!.id})`
-      );
+      duplicateBuildings++;
       continue;
     }
 
@@ -588,6 +587,9 @@ function processGMLSync(filePath: string, opts: { lod2: boolean }): Building[] {
     buildings.push(b);
   }
 
+  console.log(
+    `Processed ${buildingGroups.size} building groups from ${filePath}, found ${buildings.length} unique buildings (${duplicateBuildings} duplicates skipped)`
+  );
   return buildings;
 }
 
