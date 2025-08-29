@@ -27,6 +27,8 @@ const CITYGML_NAMESPACES = {
   gen: 'http://www.opengis.net/citygml/generics/1.0',
 };
 
+const TOTAL_BUILDING_COUNT = 1083437;
+
 // Construct XML header
 const CITYGML_HEADER: string = `<?xml version="1.0" encoding="UTF-8"?>
 <core:CityModel ${Object.entries(CITYGML_NAMESPACES)
@@ -286,12 +288,13 @@ interface FilterResult {
   buildingCount: number;
   filteredCount: number;
   originalSize: number;
+  filteredSize: number;
   chunkCount: number;
 }
 
-async function createSampleFromFile(
+async function filterFile(
   inputFile: string,
-  outputFile: string,
+  outputDir: string,
   percent: number,
   chunkSize: number,
   region?: Region,
@@ -327,6 +330,7 @@ async function createSampleFromFile(
             filteredCount: 0,
             chunkCount: 0,
             originalSize: stats.size,
+            filteredSize: 0,
           };
         }
       } else {
@@ -349,20 +353,18 @@ async function createSampleFromFile(
     let buildingDepth = 0;
     let buildingCount = 0;
     let filteredCount = 0;
+    let filteredSize = 0;
     let headerComplete = false;
     let currentBuildingInBoundary = false;
     let buildingPoints: Point[] = [];
     let skipBuildingLines = false;
 
     function indentLine(line: string): string {
-      return '  '.repeat(buildingDepth) + line;
+      return '  '.repeat(buildingDepth + 2) + line;
     }
-
-    // let tmpOutputStream: fs.WriteStream
 
     // chunk stream
     let currentChunkStream: fs.WriteStream | undefined = undefined;
-    // let tmpChunkStream: fs.WriteStream;
     let chunkCount = 0;
     let buildingsInCurrentChunk = 0;
     let baseFileName: string;
@@ -385,7 +387,6 @@ async function createSampleFromFile(
 
     // Take first p elements and create a Set for O(1) lookup
     const selectedIndicesSet = new Set(indices.slice(0, p));
-    console.log(selectedIndicesSet);
 
     console.log(`🔍 Scanning for buildings...`);
     if (p < 100) {
@@ -415,7 +416,7 @@ async function createSampleFromFile(
       if (!inBuilding && line.includes('<bldg:Building gml:id=')) {
         inBuilding = true;
         buildingDepth = 1;
-        currentBuilding = ['  <cityObjectMember>', line]; // Start with cityObjectMember tag
+        currentBuilding = ['  <cityObjectMember>', indentLine(line)]; // Start with cityObjectMember tag
         buildingCount++;
         currentBuildingInBoundary = false;
         buildingPoints = [];
@@ -424,22 +425,10 @@ async function createSampleFromFile(
         // Create new chunk file if needed; reset chunk streams and envelope
         if (chunkSize && !currentChunkStream) {
           chunkCount++;
-          const chunkFileName = `${baseFileName}_chunk_${chunkCount.toString().padStart(3, '0')}.gml`;
-          const chunkFilePath = path.join(
-            path.dirname(outputFile),
-            chunkFileName
-          );
-
-          // const tmpChunkFileName = `${chunkFileName}.tmp`;
-          /*
-          const tmpChunkFilePath = path.join(
-            path.dirname(outputFile),
-            tmpChunkFileName
-          );
-          */
+          const chunkFileName = `${baseFileName}-chunk-${chunkCount.toString().padStart(3, '0')}.gml`;
+          const chunkFilePath = path.join(outputDir, chunkFileName);
 
           currentChunkStream = fs.createWriteStream(chunkFilePath);
-          // tmpChunkStream = fs.createWriteStream(tmpChunkFilePath);
 
           // Write header to new chunk file, then wait for buildings.
           currentChunkStream.write(CITYGML_HEADER + '\n');
@@ -456,7 +445,7 @@ async function createSampleFromFile(
             `Estimated total buildings:  ~${estimatedTotal.toLocaleString()} buildings`
           );
           console.log(
-            `Target sample size:         ~${sampleSize.toLocaleString()} buildings`
+            `Target sample, pre-filter:  ~${sampleSize.toLocaleString()} buildings`
           );
           process.stdout.write('\n');
         }
@@ -514,7 +503,6 @@ async function createSampleFromFile(
           buildingDepth--;
           if (buildingDepth === 0) {
             // Building complete
-            // check the sample
             // Only include building if it's in the target area (when filtering is enabled)
             if (!(region || polygon) || currentBuildingInBoundary) {
               currentBuilding.push('  </cityObjectMember>'); // Close cityObjectMember tag
@@ -534,6 +522,8 @@ async function createSampleFromFile(
                   // Close current chunk
                   currentChunkStream!.write(CITYGML_FOOTER + '\n');
                   currentChunkStream!.end();
+
+                  filteredSize += fs.statSync(currentChunkStream!.path).size;
 
                   console.log(
                     `✅ Completed chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`
@@ -557,7 +547,7 @@ async function createSampleFromFile(
         // Progress indicator
         if (buildingCount % 1000 === 0 && buildingCount > 0) {
           var progress =
-            ' ' + '█'.repeat(Math.floor((buildingCount * 600000) / stats.size));
+            ' ' + '█'.repeat(Math.floor((buildingCount * 300000) / stats.size));
           readline.clearLine(process.stdout, 0);
           process.stdout.write(`${progress}\n`);
           process.stdout.write(
@@ -614,41 +604,51 @@ async function createSampleFromFile(
         if (currentChunkStream && buildingsInCurrentChunk > 0) {
           currentChunkStream.write(CITYGML_FOOTER + '\n');
           currentChunkStream.end();
+          filteredSize += fs.statSync(currentChunkStream.path).size;
           console.log(
             `✅ Completed final chunk ${chunkCount} with ${buildingsInCurrentChunk} buildings`
           );
         }
 
         console.log(
-          `Selected ${filteredCount} buildings for sample (${chunkCount} chunks)`
+          `Filtered ${filteredCount} buildings for sample (${chunkCount} chunks)`
         );
 
         // Wait for the stream to finish writing
-        if (currentChunkStream) {
+        if (currentChunkStream && filteredCount > 0) {
           currentChunkStream.on('finish', () => {
             console.log(
-              `✅ Created ${chunkCount} chunk files in: ${path.dirname(outputFile)}`
+              `✅ Created ${chunkCount} chunk files in: ${outputDir}`
             );
 
-            // In chunking mode, we don't have a single output file to stat
             // Just show the original size and chunk count
             const originalSize = stats.size;
+            const originalSizeMB = (originalSize / 1024 / 1024).toFixed(1);
+            const filteredSizeMB = (filteredSize / 1024 / 1024).toFixed(1);
             console.log(
-              `📊 Original: ${(originalSize / 1024 / 1024).toFixed(1)} MB → ${chunkCount} chunk files created`
+              `📊 Original: ${originalSizeMB} MB → ${chunkCount} chunk files: ${filteredSizeMB} MB`
             );
 
             resolve({
               buildingCount,
               filteredCount,
               originalSize,
+              filteredSize,
               chunkCount,
             });
           });
         } else {
+          // No buildings were filtered, clean up empty chunk file
+          if (currentChunkStream) {
+            currentChunkStream.end();
+            fs.unlinkSync(currentChunkStream.path);
+          }
+          console.log('No buildings were filtered - removing empty chunk file');
           resolve({
             buildingCount,
             filteredCount,
             originalSize: stats.size,
+            filteredSize,
             chunkCount,
           });
         }
@@ -678,15 +678,15 @@ async function processAllFiles(
   chunkSize: number
 ): Promise<void> {
   const completeDir = 'data/complete';
-  const sampleDir = outputDirName ? `data/${outputDirName}` : 'data/sample';
+  const outputDir = `data/${outputDirName}`;
 
-  // Ensure sample directory exists
-  if (!fs.existsSync(sampleDir)) {
-    fs.mkdirSync(sampleDir, { recursive: true });
+  // Ensure filtered directory exists
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
   }
 
   // Get GML files to process
-  let gmlFiles;
+  let gmlFiles: string[] = [];
   if (specificDANumbers) {
     // Process specific DA numbers
     gmlFiles = specificDANumbers.map(
@@ -710,11 +710,12 @@ async function processAllFiles(
   }
 
   const results: FilterResult[] = [];
-  let totalOriginalBuildings = 0;
-  let totalSampleBuildings = 0;
+  let totalScannedBuildings = 0;
+  let totalFilteredBuildings = 0;
   let totalOriginalSize = 0;
-  let totalSampleSize = 0;
+  let totalFilteredSize = 0;
   let processedCount = 0;
+  let emptyCount = 0;
   let failedCount = 0;
   let statusEmojis: string[] = [];
 
@@ -722,19 +723,15 @@ async function processAllFiles(
   for (let i = 0; i < gmlFiles.length; i++) {
     const gmlFile = gmlFiles[i];
     const inputFile = path.join(completeDir, gmlFile);
-    const outputFile = path.join(
-      sampleDir,
-      gmlFile.replace('.gml', '_Sample.gml')
-    );
 
     try {
       console.log(`\n${'='.repeat(50)}`);
       console.log(`Processing file ${i + 1} of ${gmlFiles.length}: ${gmlFile}`);
       console.log(`${'='.repeat(50)}`);
 
-      const result = await createSampleFromFile(
+      const result = await filterFile(
         inputFile,
-        outputFile,
+        outputDir,
         percent,
         chunkSize,
         region,
@@ -748,34 +745,32 @@ async function processAllFiles(
           ...result,
         });
 
-        totalOriginalBuildings += result.buildingCount;
-        totalSampleBuildings += result.filteredCount;
+        totalScannedBuildings += result.buildingCount;
+        totalFilteredBuildings += result.filteredCount;
         totalOriginalSize += result.originalSize;
+        totalFilteredSize += result.filteredSize;
         processedCount++;
-        statusEmojis.push('✅');
+        statusEmojis.push('🟩');
 
         console.log(
           `✅ Successfully processed ${gmlFile} (${result.filteredCount} buildings)`
         );
       } else {
         processedCount++;
-        statusEmojis.push('0️⃣');
+        emptyCount++;
+        totalOriginalSize += result.originalSize;
+        statusEmojis.push('🟨');
 
         console.log(
-          `0️⃣ Processed ${gmlFile} (no buildings in ${polygon ? 'given polygon' : { regionArg }})`
+          `❎ Processed ${gmlFile} (no buildings in ${polygon ? 'given polygon' : regionArg})`
         );
-
-        // Remove the output file if it's empty
-        if (fs.existsSync(outputFile)) {
-          fs.unlinkSync(outputFile);
-        }
       }
     } catch (e) {
       const error = e as Error;
 
       console.error(`❌ Failed to process ${gmlFile}:`, error.message);
       failedCount++;
-      statusEmojis.push('❌');
+      statusEmojis.push('🟥');
 
       if (skipOnError) {
         console.log(`⏭️  Skipping to next file...`);
@@ -796,39 +791,66 @@ async function processAllFiles(
     console.log('\n' + '='.repeat(60));
     console.log('📋 SUMMARY');
     console.log('='.repeat(60));
+    console.log(`Sample rate: ${percent}%`);
+    if (region || polygon) {
+      console.log(`Boundary filter: ${region || 'custom polygon'}`);
+    }
     console.log(`Files processed: ${processedCount}/${gmlFiles.length}`);
+    if (emptyCount > 0) {
+      console.log(`Files with no buildings in boundary: ${emptyCount}`);
+    }
     if (failedCount > 0) {
       console.log(`Files failed: ${failedCount}/${gmlFiles.length}`);
     }
     if (gmlFiles.length > processedCount + failedCount) {
       const errorSkippedCount = gmlFiles.length - processedCount - failedCount;
       console.log(`Files skipped (after error): ${errorSkippedCount}`);
-      statusEmojis.push('⏭️'.repeat(errorSkippedCount));
+      statusEmojis.push('🟦'.repeat(errorSkippedCount));
     }
 
     console.log(
-      `Total buildings: ${totalOriginalBuildings.toLocaleString()} → ${totalSampleBuildings.toLocaleString()} (${((totalSampleBuildings / totalOriginalBuildings) * 100).toFixed(1)}%)`
+      `\nTotal buildings:    ${TOTAL_BUILDING_COUNT.toLocaleString()}`,
+      `\nBuildings scanned:  ${TOTAL_BUILDING_COUNT.toLocaleString()} → ${totalScannedBuildings.toLocaleString()} (${((totalScannedBuildings / TOTAL_BUILDING_COUNT) * 100).toFixed(1)}%)`,
+      `\nBuildings filtered: ${totalScannedBuildings.toLocaleString()} → ${totalFilteredBuildings.toLocaleString()} (${((totalFilteredBuildings / totalScannedBuildings) * 100).toFixed(1)}%)`,
+      `\nBuilding reduction: ${TOTAL_BUILDING_COUNT.toLocaleString()} → ${totalFilteredBuildings.toLocaleString()} (${(100 - (totalFilteredBuildings / TOTAL_BUILDING_COUNT) * 100).toFixed(1)}%)`
     );
-    if (chunkSize) {
-      const totalChunks = results.reduce(
-        (sum, r) => sum + (r.chunkCount || 0),
-        0
-      );
-      console.log(`Total chunks created: ${totalChunks.toLocaleString()}`);
-      console.log(`Chunk size: ${chunkSize} buildings per file`);
-    }
+
+    const totalChunks = results.reduce(
+      (sum, r) => sum + (r.chunkCount || 0),
+      0
+    );
+    console.log(`Total chunks created: ${totalChunks.toLocaleString()}`);
+    console.log(`Chunk size: ${chunkSize} buildings per file`);
     console.log(
-      `Total size: ${(totalOriginalSize / 1024 / 1024 / 1024).toFixed(1)} GB → ${(totalSampleSize / 1024 / 1024).toFixed(1)} MB`
+      `Total size: ${(totalOriginalSize / 1024 / 1024 / 1024).toFixed(1)} GB → ${(totalFilteredSize / 1024 / 1024).toFixed(1)} MB`
     );
     console.log(
-      `Overall size reduction: ${(((totalOriginalSize - totalSampleSize) / totalOriginalSize) * 100).toFixed(1)}%`
+      `Overall size reduction: ${(((totalOriginalSize - totalFilteredSize) / totalOriginalSize) * 100).toFixed(1)}%`
     );
+
+    // Add DA numbers row
+    const files =
+      gmlFiles
+        .map((f) => f.match(/DA(\d+)/)?.[1])
+        .filter(Boolean)
+        .map((n) => `①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳`[Number(n) - 1])
+        .join(' ') + ' ';
 
     // Add emoji status row
-    const emojiRow = statusEmojis.join('');
-    console.log(`\n📊 Status: ${emojiRow}`);
+    const emoji = statusEmojis.join('');
 
-    console.log('\n📁 Sample files created in: data/sample/');
+    const space = Math.max(Math.floor(emoji.length / 2) - 4, 0);
+    const p = '='.repeat(space) + (space ? ' ' : '');
+    const s = (space ? ' ' : '') + '='.repeat(space);
+    const empty = ' '.repeat(emoji.length);
+    const pad = ' '.repeat(Math.max(12 - emoji.length, 6));
+    console.log(`\n${p}Status${s}      ===== Legend =====`);
+    console.log(`${files}${pad}🟩 Success`);
+    console.log(`${emoji}${pad}🟨 Success (empty)`);
+    console.log(`${empty}${pad}🟥 Error`);
+    console.log(`${empty}${pad}🟦 Skipped`);
+
+    console.log(`\n📁 Sample files created in: data/${outputDirName}`);
     results.forEach((result) => {
       console.log(
         `  - ${result.file!.replace('.gml', '_Sample.gml')} (${result.filteredCount} buildings)`
@@ -836,9 +858,7 @@ async function processAllFiles(
     });
   }
 
-  if (processedCount === gmlFiles.length) {
-    console.log('\n✅ All files processed successfully!');
-  } else if (failedCount > 0) {
+  if (failedCount > 0) {
     console.log(`\n⚠️  Processing completed with ${failedCount} failures.`);
   } else {
     console.log('\n✅ All files processed successfully!');
@@ -955,21 +975,27 @@ interface ArgOpts<T> {
   default?: T | undefined;
 }
 
+// Custom error type for argument parsing errors
+class ArgsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ArgsError';
+  }
+}
+
 // Parse polygon string from command line argument
 function parsePolygonString(polyString: string): Polyline {
   try {
-    // Remove quotes and split by commas
     const cleanString = polyString.replace(/['"]/g, '');
     const coordPairs = cleanString.split('),(');
 
     const polygon: Polyline = [];
     for (const pair of coordPairs) {
-      // Remove parentheses and split by comma
       const cleanPair = pair.replace(/[()]/g, '');
       const [lat, lng] = cleanPair.split(',').map(Number);
 
       if (isNaN(lat) || isNaN(lng)) {
-        throw new Error(`Invalid coordinate: ${pair}`);
+        throw new ArgsError(`Invalid coordinate: ${pair}`);
       }
 
       polygon.push([lat, lng]);
@@ -977,8 +1003,8 @@ function parsePolygonString(polyString: string): Polyline {
 
     return polygon;
   } catch (e) {
-    const error = e as Error;
-    throw new Error(`Failed to parse polygon: ${error.message}`);
+    if (e instanceof ArgsError) throw e;
+    throw new ArgsError(`Failed to parse polygon: ${(e as Error).message}`);
   }
 }
 
@@ -991,30 +1017,33 @@ function makeArgGetter<T>(
     aliases: string[] = [],
     opts?: ArgOpts<T>
   ): T | undefined {
-    // value is...
-    // true        if just the flag
-    // a string    if the flag is followed by a value
-    // undefined   if the arg is not supplied
-    let argValue = getArg(name, aliases);
-    let flagsString = [name, ...aliases].map(argNameToFlag).join('/');
+    try {
+      let argValue = getArg(name, aliases);
+      let flagsString = [name, ...aliases].map(argNameToFlag).join('/');
 
-    if (typeof argValue === 'string') {
-      return parse(argValue, name);
-    } else if (argValue === true) {
-      // hack to allow boolean flags
-      if (typeof defaultValue === 'boolean') {
-        return parse('true', name);
-      } else {
-        throw new Error(`Using ${flagsString} requires passing a value`);
+      if (typeof argValue === 'string') {
+        return parse(argValue, name);
+      } else if (argValue === true) {
+        if (typeof defaultValue === 'boolean') {
+          return parse('true', name);
+        } else {
+          throw new ArgsError(`Using ${flagsString} requires passing a value`);
+        }
+      } else if (argValue === undefined) {
+        if (opts?.default !== undefined) {
+          return opts?.default;
+        } else if (opts?.required) {
+          throw new ArgsError(`${flagsString} is required`);
+        } else {
+          return undefined;
+        }
       }
-    } else if (argValue === undefined) {
-      if (opts?.default !== undefined) {
-        return opts?.default;
-      } else if (opts?.required) {
-        throw new Error(`${flagsString} is required`);
-      } else {
-        return undefined;
+    } catch (e) {
+      if (e instanceof ArgsError) {
+        console.error(`❌ ${e.message}`);
+        process.exit(1);
       }
+      throw e;
     }
   };
 }
@@ -1041,15 +1070,14 @@ function parseRange(arg: string, argName: string): number[] {
       }
     }
 
-    // could not parse, or lower > upper
-    throw new Error(
-      `${argNameToFlag(argName)} takes a comma-separated range  (e.g. "1,2,5-7")`
+    throw new ArgsError(
+      `${argNameToFlag(argName)} takes a comma-separated range (e.g. "1,2,5-7")`
     );
   }
 
   if (!numbers.size) {
-    throw new Error(
-      `${argNameToFlag(argName)} takes a comma-separated range  (e.g. "1,2,5-7")`
+    throw new ArgsError(
+      `${argNameToFlag(argName)} takes a comma-separated range (e.g. "1,2,5-7")`
     );
   }
 
@@ -1081,7 +1109,7 @@ if (regionArg && polygonArg) {
   process.exit(1);
 }
 
-if (regionArg && !(REGIONS.keys() as unknown as string[]).includes(regionArg)) {
+if (regionArg && !(new Set(REGIONS.keys()) as Set<string>).has(regionArg)) {
   console.error(
     `❌ Error: Invalid region name: ${regionArg}. Valid options are: ${Array.from(REGIONS.keys()).join(', ')}`
   );
