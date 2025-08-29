@@ -268,7 +268,7 @@ function extrudeFootprint(footprint: Vec2[], height: number): Mesh {
 
   const topBase = 0,
     botBase = n;
-  const indices = [];
+  const indices: number[] = [];
 
   // top
   for (let i = 0; i < tri.length; i += 3) {
@@ -297,7 +297,7 @@ function extrudeFootprint(footprint: Vec2[], height: number): Mesh {
   };
 }
 
-function bbox2D(points: Vec2[]) {
+function bbox2D(points: Vec2[]): [number, number, number, number] {
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
@@ -329,7 +329,7 @@ function containsTag(node: GMLNode, name: string): boolean {
   return false;
 }
 
-function findLinearRing(container: GMLNode) {
+function findLinearRing(container: GMLNode): Ring3D | null {
   const lr =
     container['gml:LinearRing'] || container['LinearRing'] || container;
   const pos = lr?.['gml:posList'] || lr?.['posList'];
@@ -338,7 +338,7 @@ function findLinearRing(container: GMLNode) {
 }
 
 // returns array: [ [ring0_xyz[], hole1_xyz[], ...], ... ]
-function extractPolygons(node: GMLNode): Poly[] {
+function extractPolygons(node: GMLNode): Poly3D[] {
   const polys = [];
   for (const sub of walk(node)) {
     for (const k of Object.keys(sub)) {
@@ -393,7 +393,7 @@ function extractLod0Footprint(node: GMLNode) {
  *   mesh: { positions: Float32Array, indices: Uint32Array }  // present if built
  * }
  */
-type Poly = Ring3D[];
+type Poly3D = Ring3D[];
 
 interface Building {
   id: string;
@@ -404,7 +404,7 @@ interface Building {
 
 interface BuildingElements {
   node: GMLNode;
-  polys: Poly[];
+  polys: Poly3D[];
 }
 
 function processGMLSync(filePath: string, opts: { lod2: boolean }): Building[] {
@@ -462,7 +462,7 @@ function processGMLSync(filePath: string, opts: { lod2: boolean }): Building[] {
   }
 
   // Process each building group and deduplicate by footprint
-  const footprintToBuilding = new Map(); // footprint key -> building
+  const footprintToBuilding = new Map<string, Building>(); // footprint key -> building
 
   for (const [buildingId, elements] of buildingGroups) {
     // Calculate overall height from all elements
@@ -539,7 +539,7 @@ function processGMLSync(filePath: string, opts: { lod2: boolean }): Building[] {
     // Check if we already have a building with this footprint
     if (footprintToBuilding.has(footprintKey)) {
       console.log(
-        `Skipping duplicate building ${buildingId} (same footprint as ${footprintToBuilding.get(footprintKey).id})`
+        `Skipping duplicate building ${buildingId} (same footprint as ${footprintToBuilding.get(footprintKey)!.id})`
       );
       continue;
     }
@@ -610,7 +610,7 @@ function writeFlatbushIndex(
   buildings: Building[],
   outBin: string,
   outJSON: string
-) {
+): void {
   const idx = new Flatbush(buildings.length);
   for (const b of buildings) {
     const [minX, minY, maxX, maxY] = bbox2D(b.footprint);
@@ -629,7 +629,7 @@ function writeFlatbushIndex(
   fs.writeFileSync(outJSON, JSON.stringify(buildings.map((b) => b.id)));
 }
 
-function writeGLB(buildings: Building[], outGlb: string) {
+function writeGLB(buildings: Building[], outGlb: string): void {
   console.log(
     `Writing GLB with ${buildings.filter((b) => b.mesh).length} meshes`
   );
@@ -920,7 +920,7 @@ function writeGLB(buildings: Building[], outGlb: string) {
   for (const p of files) {
     const f = path.basename(p);
     console.log(`Parsing ${f} …`);
-    const bs = processGMLSync(p, { lod2: LOD2 });
+    const bs: Building[] = processGMLSync(p, { lod2: LOD2 });
     console.log(`  +${bs.length} buildings`);
     all.push(...bs);
   }
